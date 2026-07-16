@@ -8,8 +8,14 @@ Nickname is still pseudonymous data in a real unit. The MVP therefore uses a gen
 
 ## Inbound data
 
-- The spreadsheet contract requires `nickname` / `ชื่อเล่น`.
-- Imports with first-name, last-name, or full-name headers are rejected.
+- The normalized spreadsheet contract requires `nickname` / `ชื่อเล่น`.
+- The supplied MICU layout may include `รหัสพนักงาน` and the legacy
+  `ชื่อ - สกุล` label. Employee-code and note cells are accepted for source
+  compatibility but are dropped before the normalized dataset is returned.
+- Values under the legacy display label must still be unique single-token
+  nicknames or pseudonyms; multi-token legal names remain rejected.
+- Outside that exact compatibility layout, first-name, last-name, and full-name
+  headers are rejected.
 - Raw source rows are not sent to OpenAI.
 - Only ambiguous cell tokens are sent for normalization.
 - Explanation requests contain nickname, date, request, assignment, reason code, and solver facts only.
@@ -17,7 +23,8 @@ Nickname is still pseudonymous data in a real unit. The MVP therefore uses a gen
 
 ## Stored data
 
-- `mst_employee` has `nickname` and `external_ref`; it intentionally has no first/last-name columns.
+- `employees` stores a generated UUID and `nickname`; it intentionally has no
+  employee-code, first-name, or last-name column.
 - Period employees snapshot only nickname, skill level, and pseudonymous reference.
 - Original uploads belong in a private Supabase Storage bucket with signed access, not a public bucket.
 - Confirmed versions are immutable and all changes are audit logged.

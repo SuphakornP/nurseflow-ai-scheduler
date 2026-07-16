@@ -52,6 +52,95 @@ async function workbookBytes(includeIdentityColumn = false) {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
+const LIVE_SHEET_STAFF = [
+  { employeeCode: 900001, nickname: "Mint", level: "Incharge" },
+  { employeeCode: 900002, nickname: "Beam", level: "Trainee Inc." },
+  { employeeCode: 900003, nickname: "Fern", level: "Member L.1" },
+  { employeeCode: 900004, nickname: "Pond", level: "Member L.2" },
+  { employeeCode: 900005, nickname: "Sky", level: "Member L.0" },
+] as const;
+
+async function liveGoogleSheetBytes(
+  employeeCodes: readonly (string | number)[] = LIVE_SHEET_STAFF.map(
+    (staff) => staff.employeeCode,
+  ),
+  nicknames: readonly string[] = LIVE_SHEET_STAFF.map((staff) => staff.nickname),
+) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("ชีต 1");
+  const contextDays = [29, 30, 31];
+  const augustDays = Array.from({ length: 31 }, (_, index) => index + 1);
+  const weekdayLabels = [
+    "พ",
+    "พฤ",
+    "ศ",
+    "ส",
+    "อา",
+    "จ",
+    "อ",
+    "พ",
+    "พฤ",
+    "ศ",
+    "ส",
+    "อา",
+    "จ",
+    "อ",
+    "พ",
+    "พฤ",
+    "ศ",
+    "ส",
+    "อา",
+    "จ",
+    "อ",
+    "พ",
+    "พฤ",
+    "ศ",
+    "ส",
+    "อา",
+    "จ",
+    "อ",
+    "พ",
+    "พฤ",
+    "ศ",
+    "ส",
+    "อา",
+    "จ",
+  ];
+
+  sheet.addRow(["ตารางขอเวร MICU สิงหาคม 2569"]);
+  sheet.mergeCells("A1:AL1");
+  sheet.addRow(["", "", "", ...weekdayLabels, "หมายเหตุ"]);
+  sheet.addRow([
+    "รหัสพนักงาน",
+    "ชื่อ - สกุล",
+    "Level",
+    ...contextDays,
+    ...augustDays,
+    "",
+  ]);
+
+  LIVE_SHEET_STAFF.forEach((staff, index) => {
+    const monthlyRequests = Array(31).fill("");
+    if (index === 0) {
+      monthlyRequests.splice(0, 4, "D/N", "D1", "O1/N", "VAC1");
+    }
+    sheet.addRow([
+      employeeCodes[index] ?? "",
+      nicknames[index] ?? staff.nickname,
+      staff.level,
+      "D",
+      "N",
+      "O",
+      ...monthlyRequests,
+      `private-note-${index + 1}`,
+    ]);
+  });
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const bytes = new Uint8Array(buffer);
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
 describe("parseWorkbook", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -70,6 +159,109 @@ describe("parseWorkbook", () => {
     await expect(
       parseWorkbook(await workbookBytes(true), period, "unsafe.xlsx"),
     ).rejects.toThrow("nickname or pseudonym only");
+  });
+
+  it("parses the live Google Sheet layout without returning employee codes or notes", async () => {
+    const dataset = await parseWorkbook(
+      await liveGoogleSheetBytes(),
+      period,
+      "Google Sheet: ขอเวรสิงหา",
+    );
+
+    expect(dataset.privacyMode).toBe("NICKNAME_ONLY");
+    expect(dataset.nurses).toHaveLength(5);
+    expect(dataset.nurses.map(({ nickname, skillLevel }) => ({ nickname, skillLevel }))).toEqual([
+      { nickname: "Mint", skillLevel: "INCHARGE" },
+      { nickname: "Beam", skillLevel: "TRAINEE_INC" },
+      { nickname: "Fern", skillLevel: "MEMBER_L1" },
+      { nickname: "Pond", skillLevel: "MEMBER_L2" },
+      { nickname: "Sky", skillLevel: "MEMBER_L0" },
+    ]);
+    expect(dataset.previousAssignments).toHaveLength(15);
+    expect(dataset.previousAssignments.slice(0, 3)).toMatchObject([
+      { date: "2026-07-29", shift: "D" },
+      { date: "2026-07-30", shift: "N" },
+      { date: "2026-07-31", shift: "OFF" },
+    ]);
+    expect(dataset.requests).toHaveLength(155);
+
+    const serialized = JSON.stringify(dataset);
+    for (const staff of LIVE_SHEET_STAFF) {
+      expect(serialized).not.toContain(String(staff.employeeCode));
+    }
+    expect(serialized).not.toContain("private-note");
+  });
+
+  it("accepts but ignores blank, duplicate, and changed employee codes", async () => {
+    const original = await parseWorkbook(
+      await liveGoogleSheetBytes(),
+      period,
+      "original.xlsx",
+    );
+    const ignoredCodes: Array<string | number> = LIVE_SHEET_STAFF.map(
+      (staff) => staff.employeeCode,
+    );
+    ignoredCodes[0] = 999999;
+    ignoredCodes[1] = ignoredCodes[0];
+    ignoredCodes[2] = "";
+    const changed = await parseWorkbook(
+      await liveGoogleSheetBytes(ignoredCodes),
+      period,
+      "changed.xlsx",
+    );
+
+    expect(changed.nurses.map((nurse) => nurse.id)).toEqual(
+      original.nurses.map((nurse) => nurse.id),
+    );
+    expect(JSON.stringify(changed)).not.toContain("999999");
+  });
+
+  it("still rejects a full legal name inside the legacy display column", async () => {
+    const nicknames: string[] = LIVE_SHEET_STAFF.map((staff) => staff.nickname);
+    nicknames[0] = "Mint Example";
+
+    await expect(
+      parseWorkbook(
+        await liveGoogleSheetBytes(undefined, nicknames),
+        period,
+        "unsafe-live-sheet.xlsx",
+      ),
+    ).rejects.toThrow("single nickname or pseudonym");
+  });
+
+  it("keeps non-standard live request tokens reviewable", async () => {
+    const dataset = await parseWorkbook(
+      await liveGoogleSheetBytes(),
+      period,
+      "live-tokens.xlsx",
+    );
+    const requestByRawValue = new Map(
+      dataset.requests
+        .filter((request) => request.rawValue)
+        .map((request) => [request.rawValue, request]),
+    );
+
+    expect(requestByRawValue.get("D/N")).toMatchObject({
+      normalizedType: "AMBIGUOUS",
+      allowedAssignments: ["D", "N", "OFF"],
+      requiresReview: true,
+    });
+    expect(requestByRawValue.get("D1")).toMatchObject({
+      normalizedType: "AMBIGUOUS",
+      allowedAssignments: ["D", "N", "OFF"],
+      requiresReview: true,
+    });
+    expect(requestByRawValue.get("O1/N")).toMatchObject({
+      normalizedType: "AMBIGUOUS",
+      priority: 1,
+      allowedAssignments: ["OFF", "N"],
+      requiresReview: true,
+    });
+    expect(requestByRawValue.get("VAC1")).toMatchObject({
+      normalizedType: "AMBIGUOUS",
+      allowedAssignments: ["D", "N", "OFF"],
+      requiresReview: true,
+    });
   });
 });
 

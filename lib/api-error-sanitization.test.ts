@@ -105,8 +105,18 @@ describe("API provider error sanitization", () => {
         {
           id: "version-1",
           versionNo: 1,
+          status: "VALID",
           solverStatus: "OPTIMAL",
-          validations: [],
+          validations: [
+            {
+              code: "COVERAGE",
+              name: "Coverage",
+              type: "HARD",
+              status: "PASS",
+              violationCount: 0,
+              details: [],
+            },
+          ],
         },
       ],
     } as never);

@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { AdminSession } from "@/lib/auth/types";
+import {
+  getConfirmationEligibility,
+  getConfirmationGatePresentation,
+  parseConfirmationSuccess,
+} from "@/lib/confirmation-eligibility";
 import { SHIFT_LABELS, WORKFLOW_STEPS } from "@/lib/constants";
 import { csvCell } from "@/lib/spreadsheet";
 import type {
@@ -297,10 +302,15 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const selectedOutcome = activeVersion ? getOutcome(activeVersion, selected) : undefined;
   const rejectedOutcomes = activeVersion?.requestOutcomes.filter((outcome) => !outcome.satisfied) ?? [];
   const isDemoSnapshot = activeVersion?.solverStatus === "DEMO";
-  const hardConstraintsPass =
-    activeVersion?.validations.every(
-      (validation) => validation.type !== "HARD" || validation.status === "PASS",
-    ) ?? false;
+  const confirmationEligibility = getConfirmationEligibility(activeVersion);
+  const confirmationGate = getConfirmationGatePresentation(activeVersion);
+  const hardRuleStateLabel = confirmationGate.state === "CONFIRMED"
+    ? "Confirmed"
+    : confirmationEligibility.eligible
+      ? isDemoSnapshot
+        ? "Reference snapshot"
+        : "Independent pass"
+      : "Confirmation blocked";
 
   const nurseById = useMemo(
     () => new Map(response.dataset.nurses.map((nurse) => [nurse.id, nurse])),
@@ -583,9 +593,10 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   };
 
   const handleConfirm = async () => {
-    if (!hardConstraintsPass) {
+    if (!confirmationEligibility.eligible) {
       setConnectionMode("error");
-      setNotice("Confirmation is blocked because a hard constraint failed.");
+      setNotice(confirmationEligibility.message);
+      setActiveStep("confirm");
       return;
     }
     setBusyAction("confirm");
@@ -598,11 +609,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           versionId: activeVersion.id,
         }),
       });
-      if (!result.ok) throw new Error(`Confirm endpoint returned ${result.status}.`);
-      const confirmation = (await result.json()) as {
-        persisted?: boolean;
-        message?: string;
-      };
+      if (!result.ok) {
+        throw new Error(await responseError(result, "The schedule could not be confirmed."));
+      }
+      const confirmation = parseConfirmationSuccess(await result.json(), activeVersion.id);
+      if (!confirmation) {
+        throw new Error("The confirmation endpoint returned an invalid success response.");
+      }
       markConfirmedLocally();
       let archiveWarning = "";
       if (confirmation.persisted) {
@@ -617,12 +630,9 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
         (confirmation.message ??
           `Version ${activeVersion.versionNo} is confirmed and ready to export.`) + archiveWarning,
       );
-    } catch {
-      markConfirmedLocally();
-      setConnectionMode(networkOnline ? "demo" : "offline");
-      setNotice(
-        "The confirmation API is unavailable. A local showcase confirmation is displayed but was not persisted.",
-      );
+    } catch (error) {
+      setConnectionMode("error");
+      setNotice(error instanceof Error ? error.message : "The schedule could not be confirmed.");
     } finally {
       setBusyAction(null);
       setActiveStep("confirm");
@@ -735,7 +745,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <button
             className="button button--primary"
             type="button"
-            disabled={busyAction === "confirm" || activeVersion.status === "CONFIRMED"}
+            disabled={busyAction === "confirm" || !confirmationEligibility.eligible}
+            title={confirmationEligibility.eligible ? undefined : confirmationGate.disabledReason}
             onClick={() => void handleConfirm()}
           >
             {activeVersion.status === "CONFIRMED"
@@ -901,17 +912,18 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="dock-copy">
               <p className="eyebrow">05 / Confirm</p>
               <h2 id="action-dock-title">Lock the selected decision</h2>
-              <p>Confirmation is allowed only while every hard rule passes.</p>
+              <p>{confirmationGate.description}</p>
             </div>
-            <div className={`confirmation-gate ${hardConstraintsPass ? "is-clear" : "is-blocked"}`}>
-              <span>{hardConstraintsPass ? "Ready" : "Blocked"}</span>
-              <strong>{activeVersion.metrics.hardConstraintsPassed}/{activeVersion.metrics.hardConstraintsTotal} hard rules</strong>
+            <div className={`confirmation-gate ${confirmationGate.className}`}>
+              <span>{confirmationGate.label}</span>
+              <strong>{confirmationGate.summary}</strong>
             </div>
             <div className="dock-actions">
               <button
                 className="button button--primary"
                 type="button"
-                disabled={busyAction === "confirm" || activeVersion.status === "CONFIRMED"}
+                disabled={busyAction === "confirm" || !confirmationEligibility.eligible}
+                title={confirmationEligibility.eligible ? undefined : confirmationGate.disabledReason}
                 onClick={() => void handleConfirm()}
               >
                 {activeVersion.status === "CONFIRMED" ? "Confirmed" : "Confirm schedule"}
@@ -937,8 +949,12 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
         </div>
         <div>
           <span>Hard rules</span>
-          <strong>{activeVersion.metrics.hardConstraintsPassed}/{activeVersion.metrics.hardConstraintsTotal}</strong>
-          <small>{isDemoSnapshot ? "Reference snapshot" : "Independent pass"}</small>
+          <strong>
+            {confirmationEligibility.hardTotal > 0
+              ? `${confirmationEligibility.hardPassed}/${confirmationEligibility.hardTotal}`
+              : "No evidence"}
+          </strong>
+          <small>{hardRuleStateLabel}</small>
         </div>
         <div>
           <span>OFF preserved</span>
@@ -1102,20 +1118,24 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <p className="eyebrow">{isDemoSnapshot ? "Reference snapshot" : "Independent check"}</p>
                 <h3>Hard constraints</h3>
               </div>
-              <span>{activeVersion.metrics.hardConstraintsPassed}/{activeVersion.metrics.hardConstraintsTotal}</span>
+              <span>{confirmationGate.summary}</span>
             </div>
-            <ul>
-              {activeVersion.validations.map((validation) => (
-                <li key={validation.code} className={`is-${validation.status.toLowerCase()}`}>
-                  <i aria-hidden="true" />
-                  <span>
-                    <strong>{validation.name}</strong>
-                    <small>{validation.violationCount} violations</small>
-                  </span>
-                  <b>{validation.status}</b>
-                </li>
-              ))}
-            </ul>
+            {confirmationEligibility.validations.length ? (
+              <ul>
+                {confirmationEligibility.validations.map((validation) => (
+                  <li key={validation.code} className={`is-${validation.status.toLowerCase()}`}>
+                    <i aria-hidden="true" />
+                    <span>
+                      <strong>{validation.name}</strong>
+                      <small>{validation.violationCount} violations</small>
+                    </span>
+                    <b>{validation.status}</b>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted-copy">No valid validation evidence is available.</p>
+            )}
           </section>
         </aside>
       </section>

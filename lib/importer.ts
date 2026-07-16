@@ -19,6 +19,13 @@ const HEADER_ALIASES = {
   skill: ["skill", "skill level", "skill_level", "level", "ระดับ", "ตำแหน่ง"],
 };
 
+// Compatibility for the supplied hospital request form. Employee codes identify
+// the layout only; they are never copied into the normalized dataset.
+const LEGACY_REQUEST_SHEET_HEADERS = {
+  employeeCode: ["รหัสพนักงาน", "employee code", "employee_code", "emp code", "empcode"],
+  displayNickname: ["ชื่อ - สกุล", "ชื่อ-สกุล"],
+};
+
 const PROHIBITED_IDENTITY_HEADERS = new Set([
   "first name",
   "firstname",
@@ -43,14 +50,17 @@ const SKILL_ALIASES: Record<string, SkillLevel> = {
   TRAINEE_INC: "TRAINEE_INC",
   TRAINEE: "TRAINEE_INC",
   "MEMBER L1": "MEMBER_L1",
+  "MEMBER L.1": "MEMBER_L1",
   "MEMBER LEVEL 1": "MEMBER_L1",
   MEMBER_L1: "MEMBER_L1",
   L1: "MEMBER_L1",
   "MEMBER L2": "MEMBER_L2",
+  "MEMBER L.2": "MEMBER_L2",
   "MEMBER LEVEL 2": "MEMBER_L2",
   MEMBER_L2: "MEMBER_L2",
   L2: "MEMBER_L2",
   "MEMBER L0": "MEMBER_L0",
+  "MEMBER L.0": "MEMBER_L0",
   "MEMBER LEVEL 0": "MEMBER_L0",
   MEMBER_L0: "MEMBER_L0",
   L0: "MEMBER_L0",
@@ -105,19 +115,46 @@ function assertNickname(value: unknown, rowNumber: number) {
   return nickname;
 }
 
-function headerDate(value: unknown, period: SchedulePeriod): string | null {
+function explicitHeaderDate(value: unknown): string | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value.toISOString().slice(0, 10);
   }
   const raw = text(value);
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{1,2}$/.test(raw)) {
-    const day = Number(raw);
-    const prefix = period.startDate.slice(0, 8);
-    const candidate = `${prefix}${day.toString().padStart(2, "0")}`;
-    return candidate >= period.startDate && candidate <= period.endDate ? candidate : null;
-  }
   return null;
+}
+
+function resolveDateColumns(headers: unknown[], expectedDates: string[]) {
+  const usedDates = new Set<string>();
+  let lastExpectedIndex = -1;
+
+  return headers.flatMap((value, index) => {
+    const explicitDate = explicitHeaderDate(value);
+    if (explicitDate) {
+      const expectedIndex = expectedDates.indexOf(explicitDate);
+      if (expectedIndex >= 0) {
+        usedDates.add(explicitDate);
+        lastExpectedIndex = expectedIndex;
+      }
+      return [{ index, date: explicitDate }];
+    }
+
+    const raw = text(value);
+    if (!/^\d{1,2}$/.test(raw)) return [];
+
+    const day = Number(raw);
+    const candidates = expectedDates.filter(
+      (date) => Number(date.slice(-2)) === day && !usedDates.has(date),
+    );
+    const date =
+      candidates.find((candidate) => expectedDates.indexOf(candidate) > lastExpectedIndex) ??
+      candidates[0];
+    if (!date) return [];
+
+    usedDates.add(date);
+    lastExpectedIndex = expectedDates.indexOf(date);
+    return [{ index, date }];
+  });
 }
 
 function previousShift(value: unknown): ShiftCode | null {
@@ -155,8 +192,12 @@ export async function parseWorkbook(
 
   const headerRowIndex = rows.slice(0, 20).findIndex((row) => {
     const keys = row.map(headerKey);
+    const hasStandardNickname = HEADER_ALIASES.nickname.some((alias) => keys.includes(alias));
+    const hasLegacyIdentity =
+      LEGACY_REQUEST_SHEET_HEADERS.employeeCode.some((alias) => keys.includes(alias)) &&
+      LEGACY_REQUEST_SHEET_HEADERS.displayNickname.some((alias) => keys.includes(alias));
     return (
-      HEADER_ALIASES.nickname.some((alias) => keys.includes(alias)) &&
+      (hasStandardNickname || hasLegacyIdentity) &&
       HEADER_ALIASES.skill.some((alias) => keys.includes(alias))
     );
   });
@@ -167,30 +208,41 @@ export async function parseWorkbook(
   }
 
   const headers = rows[headerRowIndex];
-  const prohibitedHeader = headers.map(headerKey).find((value) =>
-    PROHIBITED_IDENTITY_HEADERS.has(value),
+  const standardNicknameColumn = headers.findIndex((value) =>
+    HEADER_ALIASES.nickname.includes(headerKey(value)),
   );
+  const employeeCodeColumn = headers.findIndex((value) =>
+    LEGACY_REQUEST_SHEET_HEADERS.employeeCode.includes(headerKey(value)),
+  );
+  const legacyNicknameColumn = headers.findIndex((value) =>
+    LEGACY_REQUEST_SHEET_HEADERS.displayNickname.includes(headerKey(value)),
+  );
+  const usesLegacyRequestSheet =
+    standardNicknameColumn < 0 && employeeCodeColumn >= 0 && legacyNicknameColumn >= 0;
+  const nicknameColumn = usesLegacyRequestSheet ? legacyNicknameColumn : standardNicknameColumn;
+  const prohibitedHeader = headers
+    .map((value, index) => ({ index, value: headerKey(value) }))
+    .find(
+      ({ index, value }) =>
+        PROHIBITED_IDENTITY_HEADERS.has(value) &&
+        !(usesLegacyRequestSheet && index === nicknameColumn),
+    )?.value;
   if (prohibitedHeader) {
     throw new ImportValidationError(
       `Remove the \`${prohibitedHeader}\` column before import. NurseFlow accepts nickname or pseudonym only.`,
     );
   }
-  const nicknameColumn = headers.findIndex((value) =>
-    HEADER_ALIASES.nickname.includes(headerKey(value)),
-  );
   const skillColumn = headers.findIndex((value) =>
     HEADER_ALIASES.skill.includes(headerKey(value)),
   );
-  const dateColumns = headers
-    .map((value, index) => ({ index, date: headerDate(value, period) }))
-    .filter((item): item is { index: number; date: string } => Boolean(item.date));
-
-  const expectedDates = new Set([
+  const expectedDates = [
     ...getDates(period.contextStartDate, period.contextEndDate),
     ...getDates(period.startDate, period.endDate),
-  ]);
+  ];
+  const dateColumns = resolveDateColumns(headers, expectedDates);
+  const expectedDateSet = new Set(expectedDates);
   const availableDates = new Set(dateColumns.map((item) => item.date));
-  const missingDates = [...expectedDates].filter((date) => !availableDates.has(date));
+  const missingDates = expectedDates.filter((date) => !availableDates.has(date));
   if (missingDates.length) {
     throw new ImportValidationError(
       `Missing date columns: ${missingDates.slice(0, 6).join(", ")}`,
@@ -217,6 +269,7 @@ export async function parseWorkbook(
     nurses.push({ id: nurseId, nickname, skillLevel: parseSkill(row[skillColumn]) });
 
     dateColumns.forEach(({ index, date }) => {
+      if (!expectedDateSet.has(date)) return;
       if (date >= period.startDate && date <= period.endDate) {
         requests.push(normalizeRequestValue(row[index], nurseId, date));
       } else {

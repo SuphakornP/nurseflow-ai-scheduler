@@ -213,13 +213,22 @@ rather than creating a public demo mode.
 
 ## Data and import contract
 
-The first worksheet must include:
+The importer accepts either the normalized template or the supplied MICU
+request-form layout. The first worksheet must include:
 
 - `nickname` or `ชื่อเล่น`;
 - `skill_level` or `level`;
 - every date from the configured context range (three columns in the built-in
   August 2026 period);
 - one date column for each day in the scheduling period.
+
+For the MICU request form, the exact header combination `รหัสพนักงาน`,
+`ชื่อ - สกุล`, and `Level` is also supported. Column B is treated as the
+single-token display nickname. Employee codes and the trailing `หมายเหตุ`
+column are accepted but deliberately omitted from the normalized dataset,
+solver payload, and export. The leading `29`, `30`, and `31` columns map to
+July context dates; the following `1` through `31` columns map to August.
+`Member L.1`, `Member L.2`, and `Member L.0` are accepted skill labels.
 
 Supported request notation:
 
@@ -233,7 +242,9 @@ Supported request notation:
 | `ED` | Locked education |
 | `D`, `N`, or an unknown token | Ambiguous until a human accepts the mapping |
 
-Imports with explicit first-name, last-name, or full-name headers are rejected.
+Imports with explicit first-name, last-name, or full-name headers are rejected,
+except for the exact MICU compatibility layout above; its display values must
+still be unique single-token nicknames or pseudonyms.
 Google Sheet URLs must use the expected
 `https://docs.google.com/spreadsheets/d/...` form and be accessible to anyone
 with the link. That ingestion path is suitable only for synthetic or otherwise

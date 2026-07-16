@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdminRequest } from "@/lib/auth/request";
+import { getConfirmationEligibility } from "@/lib/confirmation-eligibility";
 import { getCachedSchedule } from "@/lib/schedule-cache";
 import { isSupabaseConfigured } from "@/lib/supabase/admin";
 import { persistAndConfirmSchedule } from "@/lib/supabase/persistence";
@@ -29,28 +30,32 @@ export async function POST(request: Request) {
       { status: 404 },
     );
   }
-  const failedHardRules = version.validations.filter(
-    (item) => item.type === "HARD" && item.status !== "PASS",
-  );
-  if (failedHardRules.length) {
+  const eligibility = getConfirmationEligibility(version);
+  if (!eligibility.eligible) {
+    const isHardFailure = eligibility.reason === "HARD_VALIDATION_FAILED";
     return NextResponse.json(
       {
-        error: "HARD_CONSTRAINT_FAILURE",
-        message: "A version with hard constraint failures cannot be confirmed.",
-        failedRules: failedHardRules.map((item) => item.code),
+        error: isHardFailure ? "HARD_CONSTRAINT_FAILURE" : "CONFIRMATION_NOT_ALLOWED",
+        reason: eligibility.reason,
+        message: eligibility.message,
+        ...(isHardFailure ? { failedRules: eligibility.failedHardRuleCodes } : {}),
       },
       { status: 409 },
     );
   }
 
-  if (!isSupabaseConfigured()) {
+  if (version.solverStatus === "DEMO" || !isSupabaseConfigured()) {
+    const confirmedAt = new Date().toISOString();
     return NextResponse.json({
       confirmed: true,
       persisted: false,
       persistenceMode: "LOCAL_DEMO",
       versionId: version.id,
-      confirmedAt: new Date().toISOString(),
-      message: "Confirmed for this showcase session only. Configure Supabase to persist versions.",
+      confirmedAt,
+      message:
+        version.solverStatus === "DEMO"
+          ? "Reference snapshot confirmed for this showcase session only. Generate a live solver result to persist it."
+          : "Confirmed for this showcase session only. Configure Supabase to persist versions.",
     });
   }
 

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { getConfirmationEligibility } from "@/lib/confirmation-eligibility";
 import { datasetToSolverProblem } from "@/lib/solver-adapter";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { GenerateScheduleResponse, ScheduleVersion } from "@/lib/types";
@@ -53,11 +54,9 @@ export async function persistAndConfirmSchedule(
   if (version.solverStatus !== "OPTIMAL" && version.solverStatus !== "FEASIBLE") {
     throw new Error("Only a live OPTIMAL or FEASIBLE solver result can be persisted.");
   }
-  const failedHardRules = version.validations.filter(
-    (validation) => validation.type === "HARD" && validation.status !== "PASS",
-  );
-  if (failedHardRules.length) {
-    throw new Error("A version with hard constraint failures cannot be persisted.");
+  const eligibility = getConfirmationEligibility(version);
+  if (!eligibility.eligible) {
+    throw new Error("Only an eligible version with complete hard-validation evidence can be persisted.");
   }
 
   const supabase = createAdminClient();
