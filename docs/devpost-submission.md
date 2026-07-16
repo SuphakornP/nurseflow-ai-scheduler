@@ -1,25 +1,24 @@
-# OpenAI Build Week — Devpost Submission Worksheet
+# OpenAI Build Week - Devpost Submission Worksheet
 
-> Prepared from the live Devpost requirements on 2026-07-16. Recheck the [hackathon page](https://openai.devpost.com/) and [official rules](https://openai.devpost.com/rules) before submitting. Do not place real credentials or secrets in this repository.
+> Live requirements and project/submission state rechecked through the Devpost Hackathons connector on 2026-07-16. This is a preparation document only: do not submit the project until the owner completes the final review. Never put credentials or real staff data in this repository.
 
 ## Submission snapshot
 
-| Item | Value |
+| Item | Current value |
 | --- | --- |
-| Devpost project | [AI NurseFlow](https://devpost.com/software/ai-nurse-shift-schedules) |
-| Current state | `submission_draft` |
-| Recommended title | **NurseFlow AI** |
-| Recommended track | **Work & Productivity** |
+| Devpost project | [NurseFlow AI](https://devpost.com/software/ai-nurse-shift-schedules) |
+| Project page state | `published` after the prepared fields were saved |
+| Hackathon submission | **Unsubmitted** (`submitted_at` is still empty) |
+| Track | **Work & Productivity** |
 | Repository | https://github.com/SuphakornP/nurseflow-ai-scheduler |
-| Deadline | **July 21, 2026 at 5:00 PM PT** / **July 22 at 7:00 AM ICT** |
+| Deadline | **Tuesday, July 21, 2026 at 5:00 PM PT** / **July 22 at 7:00 AM ICT** |
 | Demo video | Required: public YouTube, under 3 minutes, with voiceover |
 | Website | Optional |
+| Zip file | Not required |
 
-### Why Work & Productivity
+NurseFlow belongs in Work & Productivity because it improves a real operational workflow for clinical scheduling teams. It reduces manual request reconciliation while preserving accountable human approval; it is not patient-facing medical advice.
 
-NurseFlow improves a real operational workflow for clinical scheduling teams. Its main value is reducing manual request reconciliation, producing comparable schedule candidates, and preserving human approval—not providing patient-facing health advice.
-
-## Project fields
+## Copy-ready project fields
 
 ### Name
 
@@ -27,13 +26,13 @@ NurseFlow improves a real operational workflow for clinical scheduling teams. It
 
 ### Tagline
 
-`Turn nickname-only nurse requests into validated, explainable ICU schedule candidates—with human approval built in.`
+`Turn nurse requests into validated, explainable ICU schedule candidates with human approval built in.`
 
 ### Built with
 
 `GPT-5.6`, `Codex`, `OpenAI Responses API`, `Next.js`, `React`, `TypeScript`, `FastAPI`, `Python`, `Google OR-Tools CP-SAT`, `Supabase`, `Zod`, `ExcelJS`, `Vitest`, `pytest`
 
-### Project description draft
+### Project description
 
 ```markdown
 ## Inspiration
@@ -42,9 +41,9 @@ Nurse schedules are high-stakes operational documents assembled from staffing ru
 
 ## What it does
 
-NurseFlow imports a nickname-only request sheet, normalizes ambiguous request values for human review, and creates multiple ICU roster candidates. Every candidate is checked by an independent validator against coverage, skill-mix, request, sequence, and workload constraints. Schedulers can compare trade-offs, inspect assignment evidence, confirm one version, save immutable history, and export a review-ready workbook.
+NurseFlow imports pseudonymous nurse request sheets, normalizes ambiguous request values for human review, and creates multiple ICU roster candidates. It supports the supplied MICU form while discarding employee codes and notes before the normalized dataset reaches the browser workflow, solver, OpenAI, or exports. Every candidate is checked by an independent validator against coverage, skill-mix, request, sequence, and workload constraints. Schedulers can compare trade-offs, inspect assignment evidence, confirm one version, and export a review-ready workbook. When Supabase has a matching staged period roster, confirmation also saves an immutable schedule-version history.
 
-The application is admin-only. It rejects explicit full-name columns, uses synthetic showcase data, and keeps the configured administrator email out of scheduling records.
+The application is admin-only. Public examples use synthetic nicknames and no patient data. The configured administrator email is never written to scheduling records.
 
 ## How we built it
 
@@ -56,16 +55,17 @@ Codex accelerated architecture exploration, implementation across TypeScript and
 
 ## Challenges
 
-The hardest part was keeping feasibility, privacy, and explainability aligned. We had to encode real scheduling constraints, bound every import and solver input, preserve immutable requests, distinguish AI suggestions from deterministic decisions, and make complex trade-offs readable in one workspace.
+The hardest part was keeping feasibility, privacy, and explainability aligned. We had to encode real scheduling constraints, bound every import and solver input, distinguish AI suggestions from deterministic decisions, and make complex trade-offs readable in one workspace.
 
 ## Accomplishments
 
-- End-to-end import, review, optimize, validate, compare, confirm, persist, and export workflow
+- End-to-end prototype path for import, review, optimization, validation, comparison, confirmation, and export
+- Immutable candidate history when Supabase has a matching staged period roster
 - Independent validation of every generated candidate
 - Admin-only JWT session and protected server-to-server solver boundary
 - Formula-safe spreadsheet exports and bounded runtime inputs
-- 61 web tests, 58 solver tests, clean dependency audits, and responsive browser QA
-- Public, reproducible repository with synthetic nickname-only sample data
+- 117 web test cases, 58 solver tests, clean dependency audits, and responsive browser QA
+- Public, reproducible repository with synthetic pseudonymous sample data
 
 ## What we learned
 
@@ -73,33 +73,34 @@ AI is most useful here at the ambiguous edges: interpreting messy request notati
 
 ## What's next
 
-Before any hospital pilot, we would move identity to managed authentication with MFA, add shared abuse controls and session revocation, harden deployment and spreadsheet decompression limits, and validate the workflow with real scheduling teams under an approved privacy and governance process.
+Before any hospital pilot, we would move identity to managed authentication with MFA, add shared abuse controls and session revocation, introduce stable pseudonymous employee identity and transactional roster synchronization, harden deployment and spreadsheet decompression limits, and validate the workflow with real scheduling teams under an approved privacy and governance process.
 ```
 
 ## Required submission questions
 
-| Field ID | Devpost field | Prepared answer |
+| Field ID | Devpost field | Prepared answer or owner action |
 | --- | --- | --- |
-| `27945` | Submitter Type | `[CONFIRM: Individual / Team of Individuals / Organization]` |
-| `27946` | Country of Residence | `[CONFIRM COUNTRY; verify eligibility in official rules]` |
+| `27945` | Submitter Type | **Owner input required:** Individual / Team of Individuals / Organization |
+| `27946` | Country of Residence | **Owner input required:** select the legal country of residence and reconfirm eligibility |
 | `27947` | Category | `Work & Productivity` |
 | `27948` | Code repository | `https://github.com/SuphakornP/nurseflow-ai-scheduler` |
-| `27949` | Judge test URL and instructions | Use the template below; enter credentials only in Devpost's private field |
-| `27950` | `/feedback` Session ID | `[REQUIRED: run /feedback in the primary Codex task and paste the ID]` |
-| `27951` | Plugin/developer-tool instructions | `Not applicable — NurseFlow is a web application.` |
+| `27949` | Judge test URL and instructions | Optional private field; use the template below |
+| `27950` | `/feedback` Session ID | **Required owner action:** run `/feedback` in the primary Codex task and paste the returned ID |
+| `27951` | Plugin/developer-tool instructions | `Not applicable - NurseFlow is a web application.` |
 
-### Private judge instructions template (`27949`)
+### Private judge instructions (`27949`)
 
-Do not commit completed credentials here. Paste the finished version directly into Devpost:
+Complete this only in Devpost's judge-only field. Do not commit the URL's credentials here.
 
 ```text
 Demo URL: [ADD DEPLOYED URL, OR STATE THAT JUDGES SHOULD RUN LOCALLY]
 
 Local setup:
 1. Copy .env.example to .env.local and services/solver/.env.example to services/solver/.env.local.
-2. Use the same SOLVER_API_TOKEN in both files.
-3. Run npm install and uv sync --directory services/solver --extra dev.
-4. Run npm run dev:all and open http://localhost:3000.
+2. Set ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_DISPLAY_NAME, and a random AUTH_SECRET in the root file.
+3. Set one separate random SOLVER_API_TOKEN in both files. OpenAI and Supabase are optional for the local fallback path.
+4. Run npm ci and uv sync --directory services/solver --extra dev --locked.
+5. Run npm run dev:all and open http://localhost:3000.
 
 Judge-only admin email: [ENTER ONLY IN DEVPOST]
 Judge-only admin password: [ENTER ONLY IN DEVPOST]
@@ -107,22 +108,9 @@ Judge-only admin password: [ENTER ONLY IN DEVPOST]
 Use the built-in synthetic MICU dataset. No patient data or real staff identities are required.
 ```
 
-## Demo video plan (maximum 3 minutes)
+## Demo and judging plan
 
-| Time | Content |
-| --- | --- |
-| `0:00–0:20` | Problem: request sheets, hard constraints, and manual audit burden |
-| `0:20–0:40` | Admin checkpoint and nickname-only privacy boundary |
-| `0:40–1:10` | Import and human review of ambiguous request values |
-| `1:10–1:45` | Generate three CP-SAT candidates and show independent validation |
-| `1:45–2:15` | Compare trade-offs and inspect assignment evidence |
-| `2:15–2:35` | Confirm, persist history, and export the workbook |
-| `2:35–2:55` | Explain Codex's build role and GPT-5.6's bounded runtime role |
-| `2:55–3:00` | Human-in-the-loop impact statement |
-
-The voiceover must explicitly cover **what was built**, **how Codex was used**, and **how GPT-5.6 was used**. A music-only screencast does not meet the requirement.
-
-## Judging alignment
+Follow the [demo recording runbook](devpost-demo-runbook.md) for the exact voiceover, privacy checks, media shot list, and low-credit recording workflow.
 
 | Criterion | Evidence to emphasize |
 | --- | --- |
@@ -131,21 +119,21 @@ The voiceover must explicitly cover **what was built**, **how Codex was used**, 
 | Potential Impact | Less manual reconciliation for nurse schedulers while preserving accountable human approval |
 | Quality of the Idea | Deliberate separation of LLM interpretation, deterministic optimization, independent validation, and human judgment |
 
-## Submission blockers and checklist
+## Tomorrow review checklist
 
-- [x] Add a relevant open-source `LICENSE` to the public repository.
-- [ ] Confirm submitter type and country of residence against the official rules.
-- [ ] Rename the Devpost project to `NurseFlow AI` and replace the current tagline.
-- [ ] Add the project description and Built With technologies.
-- [ ] Record and publish the under-three-minute YouTube demo with required voiceover.
+- [x] Public repository includes a relevant MIT license.
+- [x] Live Devpost project page has the project name, tagline, description, Built With list, and repository URL.
+- [x] OpenAI Build Week submission remains unsubmitted; no submit action was called.
+- [x] README explains setup, sample data, Codex, and GPT-5.6 usage.
+- [x] Submission copy, judge instructions template, demo script, and credit-safe CI are prepared.
+- [ ] Confirm submitter type and country of residence; add any team members and wait for their invitations to be accepted.
 - [ ] Retrieve the primary Codex `/feedback` Session ID.
-- [ ] Decide whether judges use a deployed URL or local setup.
-- [ ] If deployed, provide throwaway judge credentials only in Devpost field `27949`.
-- [ ] Add a strong thumbnail and supporting screenshots on Devpost.
-- [x] Verify the README clearly identifies where Codex and GPT-5.6 were used.
-- [ ] Add every teammate and wait for invitations to be accepted, if applicable.
-- [ ] Recheck links, video visibility, and repository access in a signed-out browser.
-- [ ] Submit the entry; confirm it is no longer saved as a draft.
+- [ ] Decide between a deployed judge URL and local setup; add throwaway credentials only to field `27949`.
+- [ ] Capture a privacy-reviewed thumbnail and 3-4 supporting screenshots using only synthetic data, then upload them to Devpost.
+- [ ] Record and publish the voiced, under-three-minute public YouTube demo, then attach its URL to the project.
+- [ ] Recheck the repo, video, and optional demo URL in a signed-out browser.
+- [ ] Perform the owner's final content and eligibility review.
+- [ ] Submit the entry and verify the hackathon `submitted_at` value is populated. **Do not perform this step during preparation.**
 
 ## Official references
 

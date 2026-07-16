@@ -1,9 +1,10 @@
 # NurseFlow AI
 
 Admin-only, privacy-aware nurse scheduling decision support built for OpenAI
-Build Week. NurseFlow turns a nickname-only request sheet into validated ICU
-roster candidates, explains trade-offs, records the selected version, and
-exports a review-ready workbook.
+Build Week. NurseFlow turns a pseudonymous nurse request sheet into validated
+ICU roster candidates, explains trade-offs, records the selected version, and
+exports a review-ready workbook. The supplied MICU form is supported, but its
+employee-code and notes columns are discarded during import.
 
 > **Project status:** public hackathon prototype. The source is open, but the
 > admin workspace is not anonymously accessible, and solver work endpoints
@@ -351,12 +352,17 @@ Read [the database guide](docs/database.md) before using a shared project.
 | `npm audit --audit-level=low` | npm dependency advisories |
 | `uv run --directory services/solver --extra dev --with pip-audit pip-audit` | Python dependency advisories |
 
-The current baseline contains 61 Vitest tests and 58 pytest tests. Coverage
+The current baseline contains 117 Vitest cases and 58 pytest tests. Coverage
 focuses on authentication, route protection, request limits, schema boundaries,
 import privacy checks, normalization, all three optimization profiles,
 cross-month validation, error sanitization, and spreadsheet formula safety.
 Browser QA is currently manual; no automated end-to-end browser suite is
 checked in.
+
+The pull-request workflow runs lint, type checking, both test suites, and the
+production build with live OpenAI and Supabase credentials explicitly absent.
+These checks use local mocks and OR-Tools only, so review runs do not consume
+OpenAI or Supabase API credits. Normal GitHub Actions runner usage still applies.
 
 ## Deployment
 
@@ -434,6 +440,7 @@ supabase/
   migrations/            Versioned Postgres schema
   seed.sql                Synthetic MICU showcase data
 docs/                     Architecture, database, privacy, and submission notes
+.github/workflows/ci.yml  Credit-safe pull-request verification
 proxy.ts                  Next.js page/API authentication filter
 security_best_practices_report.md
 AGENTS.md                 Contributor and coding conventions
@@ -451,6 +458,7 @@ AGENTS.md                 Contributor and coding conventions
 | [Security review](security_best_practices_report.md) | Verified controls, residual risks, dependency audits, and release decision |
 | [Contributor guide](AGENTS.md) | Repository layout, style, tests, commits, and security configuration |
 | [Devpost worksheet](docs/devpost-submission.md) | Submission copy, video plan, judging alignment, and remaining checklist |
+| [Demo runbook](docs/devpost-demo-runbook.md) | Privacy-safe capture plan, voiceover, media list, and credit controls |
 
 ## Contributing
 
@@ -459,7 +467,7 @@ short imperative subject. Add focused tests for behavior changes, run
 `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`, and include
 screenshots for UI changes.
 
-Fixtures and examples must remain synthetic and nickname-only. Never include a
+Fixtures and examples must remain synthetic and pseudonymous. Never include a
 secret, personal data, or vulnerability details in a public issue. Use the
 repository's private vulnerability-reporting form when available; otherwise,
 open a detail-free issue asking the maintainer to arrange a private channel.
