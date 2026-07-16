@@ -133,7 +133,7 @@ The voiceover must explicitly cover **what was built**, **how Codex was used**, 
 
 ## Submission blockers and checklist
 
-- [ ] Add a relevant open-source `LICENSE` to the public repository.
+- [x] Add a relevant open-source `LICENSE` to the public repository.
 - [ ] Confirm submitter type and country of residence against the official rules.
 - [ ] Rename the Devpost project to `NurseFlow AI` and replace the current tagline.
 - [ ] Add the project description and Built With technologies.
@@ -142,7 +142,7 @@ The voiceover must explicitly cover **what was built**, **how Codex was used**, 
 - [ ] Decide whether judges use a deployed URL or local setup.
 - [ ] If deployed, provide throwaway judge credentials only in Devpost field `27949`.
 - [ ] Add a strong thumbnail and supporting screenshots on Devpost.
-- [ ] Verify the README clearly identifies where Codex and GPT-5.6 were used.
+- [x] Verify the README clearly identifies where Codex and GPT-5.6 were used.
 - [ ] Add every teammate and wait for invitations to be accepted, if applicable.
 - [ ] Recheck links, video visibility, and repository access in a signed-out browser.
 - [ ] Submit the entry; confirm it is no longer saved as a draft.
