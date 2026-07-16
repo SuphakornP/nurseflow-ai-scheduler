@@ -1,0 +1,259 @@
+import "server-only";
+
+import { createHash } from "node:crypto";
+import ExcelJS from "exceljs";
+import { normalizeRequestValue } from "@/lib/normalizer";
+import type {
+  Assignment,
+  Nurse,
+  ScheduleDataset,
+  SchedulePeriod,
+  ShiftCode,
+  ShiftRequest,
+  SkillLevel,
+} from "@/lib/types";
+import { getDates } from "@/lib/utils";
+
+const HEADER_ALIASES = {
+  nickname: ["nickname", "nick name", "ชื่อเล่น", "ชื่อเล่น (nickname)"],
+  skill: ["skill", "skill level", "skill_level", "level", "ระดับ", "ตำแหน่ง"],
+};
+
+const PROHIBITED_IDENTITY_HEADERS = new Set([
+  "first name",
+  "firstname",
+  "last name",
+  "lastname",
+  "full name",
+  "fullname",
+  "name",
+  "employee name",
+  "ชื่อจริง",
+  "ชื่อ-สกุล",
+  "ชื่อ - สกุล",
+  "ชื่อ นามสกุล",
+  "นามสกุล",
+]);
+
+const SKILL_ALIASES: Record<string, SkillLevel> = {
+  INCHARGE: "INCHARGE",
+  INC: "INCHARGE",
+  "TRAINEE INC": "TRAINEE_INC",
+  "TRAINEE INC.": "TRAINEE_INC",
+  TRAINEE_INC: "TRAINEE_INC",
+  TRAINEE: "TRAINEE_INC",
+  "MEMBER L1": "MEMBER_L1",
+  "MEMBER LEVEL 1": "MEMBER_L1",
+  MEMBER_L1: "MEMBER_L1",
+  L1: "MEMBER_L1",
+  "MEMBER L2": "MEMBER_L2",
+  "MEMBER LEVEL 2": "MEMBER_L2",
+  MEMBER_L2: "MEMBER_L2",
+  L2: "MEMBER_L2",
+  "MEMBER L0": "MEMBER_L0",
+  "MEMBER LEVEL 0": "MEMBER_L0",
+  MEMBER_L0: "MEMBER_L0",
+  L0: "MEMBER_L0",
+};
+
+export class ImportValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ImportValidationError";
+  }
+}
+
+function text(value: unknown) {
+  return String(value ?? "").normalize("NFKC").trim();
+}
+
+function cellValue(value: ExcelJS.CellValue): unknown {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object" || value instanceof Date) return value;
+  if ("result" in value) return value.result ?? "";
+  if ("richText" in value) return value.richText.map((item) => item.text).join("");
+  if ("text" in value) return value.text;
+  return String(value);
+}
+
+function headerKey(value: unknown) {
+  return text(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function stableId(value: string) {
+  const hash = createHash("sha256").update(value).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+function parseSkill(value: unknown): SkillLevel {
+  const skill = SKILL_ALIASES[text(value).toUpperCase().replace(/\s+/g, " ")];
+  if (!skill) throw new ImportValidationError(`Unknown skill level: ${text(value) || "(blank)"}`);
+  return skill;
+}
+
+function assertNickname(value: unknown, rowNumber: number) {
+  const nickname = text(value);
+  if (!nickname) throw new ImportValidationError(`Row ${rowNumber}: nickname is required.`);
+  if (nickname.length > 32) {
+    throw new ImportValidationError(`Row ${rowNumber}: nickname must be 32 characters or fewer.`);
+  }
+  if (/\s{1,}/.test(nickname)) {
+    throw new ImportValidationError(
+      `Row ${rowNumber}: use a single nickname or pseudonym, not a first/last name.`,
+    );
+  }
+  return nickname;
+}
+
+function headerDate(value: unknown, period: SchedulePeriod): string | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const raw = text(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{1,2}$/.test(raw)) {
+    const day = Number(raw);
+    const prefix = period.startDate.slice(0, 8);
+    const candidate = `${prefix}${day.toString().padStart(2, "0")}`;
+    return candidate >= period.startDate && candidate <= period.endDate ? candidate : null;
+  }
+  return null;
+}
+
+function previousShift(value: unknown): ShiftCode | null {
+  const cleaned = text(value).toUpperCase();
+  if (["D", "DAY"].includes(cleaned)) return "D";
+  if (["N", "NIGHT"].includes(cleaned)) return "N";
+  if (["O", "OFF"].includes(cleaned)) return "OFF";
+  if (["VAC", "VACATION"].includes(cleaned)) return "VAC";
+  if (["ED", "ชED"].includes(cleaned)) return "ED";
+  return null;
+}
+
+export async function parseWorkbook(
+  bytes: ArrayBuffer,
+  period: SchedulePeriod,
+  sourceLabel: string,
+): Promise<ScheduleDataset> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    bytes as unknown as Parameters<typeof workbook.xlsx.load>[0],
+  );
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) throw new ImportValidationError("The workbook does not contain a worksheet.");
+  const rows: unknown[][] = [];
+  worksheet.eachRow({ includeEmpty: true }, (row) => {
+    const values: unknown[] = [];
+    for (let column = 1; column <= worksheet.columnCount; column += 1) {
+      values.push(cellValue(row.getCell(column).value));
+    }
+    rows.push(values);
+  });
+  if (rows.length < 2) {
+    throw new ImportValidationError("The worksheet does not contain staff rows.");
+  }
+
+  const headerRowIndex = rows.slice(0, 20).findIndex((row) => {
+    const keys = row.map(headerKey);
+    return (
+      HEADER_ALIASES.nickname.some((alias) => keys.includes(alias)) &&
+      HEADER_ALIASES.skill.some((alias) => keys.includes(alias))
+    );
+  });
+  if (headerRowIndex < 0) {
+    throw new ImportValidationError(
+      "Could not find a header row. Include `nickname`, `skill_level`, and date columns.",
+    );
+  }
+
+  const headers = rows[headerRowIndex];
+  const prohibitedHeader = headers.map(headerKey).find((value) =>
+    PROHIBITED_IDENTITY_HEADERS.has(value),
+  );
+  if (prohibitedHeader) {
+    throw new ImportValidationError(
+      `Remove the \`${prohibitedHeader}\` column before import. NurseFlow accepts nickname or pseudonym only.`,
+    );
+  }
+  const nicknameColumn = headers.findIndex((value) =>
+    HEADER_ALIASES.nickname.includes(headerKey(value)),
+  );
+  const skillColumn = headers.findIndex((value) =>
+    HEADER_ALIASES.skill.includes(headerKey(value)),
+  );
+  const dateColumns = headers
+    .map((value, index) => ({ index, date: headerDate(value, period) }))
+    .filter((item): item is { index: number; date: string } => Boolean(item.date));
+
+  const expectedDates = new Set([
+    ...getDates(period.contextStartDate, period.contextEndDate),
+    ...getDates(period.startDate, period.endDate),
+  ]);
+  const availableDates = new Set(dateColumns.map((item) => item.date));
+  const missingDates = [...expectedDates].filter((date) => !availableDates.has(date));
+  if (missingDates.length) {
+    throw new ImportValidationError(
+      `Missing date columns: ${missingDates.slice(0, 6).join(", ")}`,
+    );
+  }
+
+  const nurses: Nurse[] = [];
+  const requests: ShiftRequest[] = [];
+  const previousAssignments: Assignment[] = [];
+  const seenNicknames = new Set<string>();
+
+  rows.slice(headerRowIndex + 1).forEach((row, offset) => {
+    if (!row.some((value) => text(value))) return;
+    const rowNumber = headerRowIndex + offset + 2;
+    const nickname = assertNickname(row[nicknameColumn], rowNumber);
+    const nicknameKey = nickname.toLocaleLowerCase("th-TH");
+    if (seenNicknames.has(nicknameKey)) {
+      throw new ImportValidationError(
+        `Row ${rowNumber}: duplicate nickname ${nickname}. Use a unique pseudonym.`,
+      );
+    }
+    seenNicknames.add(nicknameKey);
+    const nurseId = stableId(`${period.id}:${nicknameKey}`);
+    nurses.push({ id: nurseId, nickname, skillLevel: parseSkill(row[skillColumn]) });
+
+    dateColumns.forEach(({ index, date }) => {
+      if (date >= period.startDate && date <= period.endDate) {
+        requests.push(normalizeRequestValue(row[index], nurseId, date));
+      } else {
+        const shift = previousShift(row[index]);
+        if (!shift) {
+          throw new ImportValidationError(
+            `Row ${rowNumber}, ${date}: previous assignment is required.`,
+          );
+        }
+        previousAssignments.push({
+          nurseId,
+          date,
+          shift,
+          source: "LOCKED_REQUEST",
+        });
+      }
+    });
+  });
+
+  if (!nurses.length) throw new ImportValidationError("No nurse rows were found.");
+  return {
+    period,
+    nurses,
+    requests,
+    previousAssignments,
+    sourceLabel,
+    privacyMode: "NICKNAME_ONLY",
+  };
+}
+
+export function googleSheetExportUrl(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.hostname !== "docs.google.com") {
+    throw new ImportValidationError("Only HTTPS Google Sheets URLs on docs.google.com are allowed.");
+  }
+  const match = url.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!match) throw new ImportValidationError("The Google Sheets URL is invalid.");
+  const gid = url.searchParams.get("gid") || "0";
+  return `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx&gid=${gid}`;
+}

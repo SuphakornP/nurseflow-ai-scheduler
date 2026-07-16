@@ -1,0 +1,47 @@
+{
+  "name": "nurseflow-ai",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:solver": "uv run --directory services/solver python -m uvicorn app.main:app --env-file .env.local --reload --port 8000",
+    "dev:all": "concurrently -k -n web,solver -c cyan,green \"npm:dev\" \"npm:dev:solver\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test:web": "vitest run",
+    "test:solver": "uv run --directory services/solver pytest",
+    "test": "npm run test:web && npm run test:solver"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.6",
+    "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "jose": "^6.2.3",
+    "lucide-react": "^1.24.0",
+    "motion": "^12.42.2",
+    "next": "^16.2.10",
+    "openai": "^6.47.0",
+    "postcss": "^8.5.19",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "concurrently": "^10.0.3",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.10",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "postcss": "^8.5.19",
+    "uuid": "^11.1.1"
+  }
+}

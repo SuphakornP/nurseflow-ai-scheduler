@@ -1,0 +1,24 @@
+[project]
+name = "nurseflow-solver"
+version = "0.1.0"
+description = "Deterministic ICU nurse scheduling service for NurseFlow AI"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "openpyxl>=3.1,<4",
+  "ortools>=9.11,<10",
+  "pydantic>=2.10,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=6,<7",
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+pythonpath = ["."]
+testpaths = ["tests"]

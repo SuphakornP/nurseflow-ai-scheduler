@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.venv/
+
+# Next.js and TypeScript generated files
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Tests and coverage
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+output/playwright/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environment files and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local tooling and operating-system files
+.DS_Store
+.vercel/
+.idea/
+.vscode/
+
+# Generated schedules and exports may contain patient or staff data
+services/solver/generated/
+*.xlsx
+!samples/
+!samples/*.xlsx
