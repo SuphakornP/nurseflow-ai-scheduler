@@ -60,6 +60,7 @@ reviewed at full resolution. Devpost upload remains a manual owner action.
 | Asset | Prepared file |
 | --- | --- |
 | Thumbnail candidate | [`04-candidate-comparison.jpg`](screenshots/04-candidate-comparison.jpg) |
+| Admin access checkpoint | [`00-admin-login.jpg`](screenshots/00-admin-login.jpg) |
 | Synthetic intake | [`01-synthetic-demo-import.jpg`](screenshots/01-synthetic-demo-import.jpg) |
 | Request-policy review | [`02-request-review.jpg`](screenshots/02-request-review.jpg) |
 | Candidate generation | [`03-candidate-generation.jpg`](screenshots/03-candidate-generation.jpg) |
@@ -67,9 +68,9 @@ reviewed at full resolution. Devpost upload remains a manual owner action.
 | Hard validation and profiles | [`06-hard-validation.jpg`](screenshots/06-hard-validation.jpg) |
 | Fail-closed confirmation/export | [`07-confirm-export.jpg`](screenshots/07-confirm-export.jpg) |
 
-For a compact Devpost set, use the thumbnail candidate plus synthetic intake,
-preserved-VAC evidence, hard validation, and confirmation/export. Existing
-ignored mobile QA captures are not submission assets.
+For a compact Devpost set, use the thumbnail candidate plus admin access,
+synthetic intake, hard validation, and confirmation/export. Existing ignored
+mobile QA captures are not submission assets.
 
 ## Final upload QA
 

@@ -129,7 +129,7 @@ Follow the [demo recording runbook](devpost-demo-runbook.md) for the exact voice
 - [ ] Confirm submitter type and country of residence; add any team members and wait for their invitations to be accepted.
 - [ ] Retrieve the primary Codex `/feedback` Session ID.
 - [ ] Decide between a deployed judge URL and local setup; add throwaway credentials only to field `27949`.
-- [x] Capture seven privacy-reviewed 3:2 screenshots using only synthetic data; the prepared assets are in `docs/screenshots/`.
+- [x] Capture eight privacy-reviewed 3:2 screenshots using only synthetic data; the prepared assets are in `docs/screenshots/`.
 - [ ] Select a thumbnail and 3-4 supporting screenshots from the prepared gallery, then upload them to Devpost.
 - [ ] Record and publish the voiced, under-three-minute public YouTube demo, then attach its URL to the project.
 - [ ] Recheck the repo, video, and optional demo URL in a signed-out browser.

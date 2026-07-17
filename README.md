@@ -91,19 +91,20 @@ They contain no real staff, patient, employee-code, or source-sheet data.
 
 <table>
   <tr>
+    <td width="50%"><a href="docs/screenshots/00-admin-login.jpg"><img src="docs/screenshots/00-admin-login.jpg" alt="NurseFlow AI admin-only access checkpoint" width="100%"></a><br><strong>Access checkpoint</strong> - Authenticate as the provisioned administrator before any roster data is shown.</td>
     <td width="50%"><a href="docs/screenshots/01-synthetic-demo-import.jpg"><img src="docs/screenshots/01-synthetic-demo-import.jpg" alt="Synthetic MICU request intake in NurseFlow AI" width="100%"></a><br><strong>1. Synthetic intake</strong> - Load the privacy-safe showcase roster or review a Sheet/XLSX source.</td>
-    <td width="50%"><a href="docs/screenshots/02-request-review.jpg"><img src="docs/screenshots/02-request-review.jpg" alt="NurseFlow AI request policy review" width="100%"></a><br><strong>2. Review request policy</strong> - Verify fixed VAC/ED events, required choices, and soft requests before optimization.</td>
   </tr>
   <tr>
+    <td><a href="docs/screenshots/02-request-review.jpg"><img src="docs/screenshots/02-request-review.jpg" alt="NurseFlow AI request policy review" width="100%"></a><br><strong>2. Review request policy</strong> - Verify fixed VAC/ED events, required choices, and soft requests before optimization.</td>
     <td><a href="docs/screenshots/03-candidate-generation.jpg"><img src="docs/screenshots/03-candidate-generation.jpg" alt="NurseFlow AI candidate generation checkpoint" width="100%"></a><br><strong>3. Generate candidates</strong> - Optimize 868 assignments, then run an independent hard-rule validator.</td>
+  </tr>
+  <tr>
     <td><a href="docs/screenshots/04-candidate-comparison.jpg"><img src="docs/screenshots/04-candidate-comparison.jpg" alt="NurseFlow AI candidate comparison workspace" width="100%"></a><br><strong>4. Compare trade-offs</strong> - Review request fulfillment, workload balance, coverage, and Member L0 use.</td>
-  </tr>
-  <tr>
     <td><a href="docs/screenshots/05-roster-evidence.jpg"><img src="docs/screenshots/05-roster-evidence.jpg" alt="NurseFlow AI roster with preserved vacation evidence" width="100%"></a><br><strong>5. Inspect evidence</strong> - Trace an assignment to its request type and see that approved vacation remains fixed.</td>
-    <td><a href="docs/screenshots/06-hard-validation.jpg"><img src="docs/screenshots/06-hard-validation.jpg" alt="NurseFlow AI hard validation and candidate profiles" width="100%"></a><br><strong>6. Validate safety rules</strong> - Check 22 hard rules and compare all three valid optimization profiles.</td>
   </tr>
   <tr>
-    <td colspan="2"><a href="docs/screenshots/07-confirm-export.jpg"><img src="docs/screenshots/07-confirm-export.jpg" alt="NurseFlow AI fail-closed confirmation and export checkpoint" width="100%"></a><br><strong>7. Human approval</strong> - Confirmation and export remain fail-closed until the selected solver result is valid and every hard-validation item passes.</td>
+    <td><a href="docs/screenshots/06-hard-validation.jpg"><img src="docs/screenshots/06-hard-validation.jpg" alt="NurseFlow AI hard validation and candidate profiles" width="100%"></a><br><strong>6. Validate safety rules</strong> - Check 22 hard rules and compare all three valid optimization profiles.</td>
+    <td><a href="docs/screenshots/07-confirm-export.jpg"><img src="docs/screenshots/07-confirm-export.jpg" alt="NurseFlow AI fail-closed confirmation and export checkpoint" width="100%"></a><br><strong>7. Human approval</strong> - Confirmation and export remain fail-closed until the selected solver result is valid and every hard-validation item passes.</td>
   </tr>
 </table>
 
