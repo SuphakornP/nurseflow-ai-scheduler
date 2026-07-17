@@ -2,7 +2,12 @@ from datetime import date
 
 import pytest
 
-from app.models import DailyRequest, RequestResolution, ShiftCode
+from app.models import (
+    DailyRequest,
+    RequestConstraintMode,
+    RequestResolution,
+    ShiftCode,
+)
 from app.normalization import (
     NormalizationStatus,
     RequestKind,
@@ -12,20 +17,47 @@ from app.normalization import (
 
 
 @pytest.mark.parametrize("raw", ["Vac", " VAC ", "vac", "Vacation"])
-def test_vacation_aliases_are_locked(raw: str) -> None:
+def test_vacation_aliases_are_preferences_by_default(raw: str) -> None:
     result = normalize_request(
         DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
     )
     assert result.status == NormalizationStatus.NORMALIZED
-    assert result.locked_shift == ShiftCode.VACATION
+    assert result.allowed_assignments == frozenset({ShiftCode.VACATION})
+    assert result.locked_shift is None
+    assert result.constraint_mode == RequestConstraintMode.PREFERENCE
 
 
 @pytest.mark.parametrize("raw", ["ED", "ed", "\u0e0aED", " \u0e0aed "])
-def test_education_aliases_are_locked(raw: str) -> None:
+def test_education_aliases_are_preferences_by_default(raw: str) -> None:
     result = normalize_request(
         DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
     )
-    assert result.locked_shift == ShiftCode.EDUCATION
+    assert result.allowed_assignments == frozenset({ShiftCode.EDUCATION})
+    assert result.locked_shift is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "shift"),
+    [
+        ("D", ShiftCode.DAY),
+        ("N", ShiftCode.NIGHT),
+        ("VAC", ShiftCode.VACATION),
+        ("ED", ShiftCode.EDUCATION),
+    ],
+)
+def test_explicit_admin_locks_remain_immutable(raw: str, shift: ShiftCode) -> None:
+    result = normalize_request(
+        DailyRequest(
+            nurse_id="A",
+            request_date=date(2026, 8, 1),
+            raw_value=raw,
+            constraint_mode=RequestConstraintMode.LOCKED,
+        )
+    )
+
+    assert result.constraint_mode == RequestConstraintMode.LOCKED
+    assert result.locked_shift == shift
+    assert result.allowed_assignments == frozenset({shift})
 
 
 @pytest.mark.parametrize(
@@ -37,7 +69,7 @@ def test_education_aliases_are_locked(raw: str) -> None:
         ("N/O", {ShiftCode.OFF, ShiftCode.NIGHT}),
     ],
 )
-def test_flexible_aliases_have_strict_allowed_sets(
+def test_flexible_aliases_have_normalized_preference_sets(
     raw: str, allowed: set[ShiftCode]
 ) -> None:
     result = normalize_request(
@@ -45,6 +77,17 @@ def test_flexible_aliases_have_strict_allowed_sets(
     )
     assert result.kind == RequestKind.FLEXIBLE
     assert result.allowed_assignments == frozenset(allowed)
+
+
+@pytest.mark.parametrize("raw", ["O", "off", " OFF "])
+def test_plain_off_is_a_lowest_priority_preference(raw: str) -> None:
+    result = normalize_request(
+        DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
+    )
+
+    assert result.kind == RequestKind.OFF_REQUEST
+    assert result.allowed_assignments == frozenset({ShiftCode.OFF})
+    assert result.off_priority == 4
 
 
 @pytest.mark.parametrize("raw", ["O1/N", "D/N", "D1", "Vac1", "surprise"])

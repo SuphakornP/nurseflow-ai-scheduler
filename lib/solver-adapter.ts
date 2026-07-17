@@ -6,6 +6,7 @@ import type {
   ConstraintResult,
   GenerateScheduleResponse,
   Nurse,
+  RequestConstraintMode,
   RequestOutcome,
   ScheduleDataset,
   ScheduleVersion,
@@ -26,8 +27,10 @@ export interface SolverProblem {
     nurse_id: string;
     request_date: string;
     raw_value: string;
+    constraint_mode: RequestConstraintMode;
     resolution?: {
-      allowed_assignments: ShiftCode[];
+      allowed_assignments?: ShiftCode[];
+      locked_shift?: ShiftCode | null;
       off_priority?: number | null;
     };
   }>;
@@ -93,6 +96,9 @@ export function datasetToSolverProblem(
       nurse_id: request.nurseId,
       request_date: request.date,
       raw_value: request.rawValue,
+      // Legacy in-memory demo fixtures predate constraintMode. Defaulting them
+      // to LOCKED preserves the previously approved-event behavior.
+      constraint_mode: request.constraintMode ?? "LOCKED",
       ...(request.requiresReview
         ? {
             resolution: {
@@ -122,15 +128,22 @@ export function solverProblemToDataset(problem: SolverDemoProblem): ScheduleData
     synthetic: true,
   }));
   const requests: ShiftRequest[] = problem.requests.map((request) => {
+    const constraintMode = request.constraint_mode ?? "LOCKED";
     const normalized = normalizeRequestValue(
       request.raw_value,
       request.nurse_id,
       request.request_date,
+      constraintMode,
     );
     if (!request.resolution) return normalized;
+    const allowedAssignments = request.resolution.allowed_assignments?.length
+      ? request.resolution.allowed_assignments
+      : request.resolution.locked_shift
+        ? [request.resolution.locked_shift]
+        : normalized.allowedAssignments;
     return {
       ...normalized,
-      allowedAssignments: request.resolution.allowed_assignments,
+      allowedAssignments,
       priority:
         request.resolution.off_priority === null ||
         request.resolution.off_priority === undefined
@@ -206,10 +219,11 @@ function requestOutcomes(
   );
   return dataset.requests
     .filter((request) => request.normalizedType !== "AVAILABLE")
-    .map((request) => {
-      const assigned = assignmentMap.get(`${request.nurseId}:${request.date}`) || "OFF";
+    .flatMap((request) => {
+      const assigned = assignmentMap.get(`${request.nurseId}:${request.date}`);
+      if (!assigned) return [];
       const satisfied = request.allowedAssignments.includes(assigned);
-      return {
+      return [{
         nurseId: request.nurseId,
         date: request.date,
         requested: request.rawValue,
@@ -220,8 +234,36 @@ function requestOutcomes(
         explanation: satisfied
           ? `${request.rawValue || "Availability"} was respected by the optimizer.`
           : `${request.rawValue} was not selected because assigning ${assigned} was required to preserve staffing, skill mix, or sequence constraints after higher-priority requests were considered.`,
-      };
+      }];
     });
+}
+
+function hasCompleteAssignmentEvidence(
+  dataset: ScheduleDataset,
+  assignments: Assignment[],
+) {
+  const periodDays =
+    Math.floor(
+      (Date.parse(`${dataset.period.endDate}T00:00:00Z`) -
+        Date.parse(`${dataset.period.startDate}T00:00:00Z`)) /
+        86_400_000,
+    ) + 1;
+  const expectedCount = periodDays * dataset.nurses.length;
+  if (assignments.length !== expectedCount) return false;
+
+  const knownNurseIds = new Set(dataset.nurses.map((nurse) => nurse.id));
+  const keys = new Set<string>();
+  for (const assignment of assignments) {
+    if (
+      !knownNurseIds.has(assignment.nurseId) ||
+      assignment.date < dataset.period.startDate ||
+      assignment.date > dataset.period.endDate
+    ) {
+      return false;
+    }
+    keys.add(`${assignment.nurseId}\0${assignment.date}`);
+  }
+  return keys.size === expectedCount;
 }
 
 function computeMetrics(
@@ -230,6 +272,7 @@ function computeMetrics(
   validations: ConstraintResult[],
   outcomes: RequestOutcome[],
 ): VersionMetrics {
+  const completeEvidence = hasCompleteAssignmentEvidence(dataset, assignments);
   const clinical = assignments.filter((item) => item.shift === "D" || item.shift === "N");
   const dayCounts = dataset.nurses.map(
     (nurse) => clinical.filter((item) => item.nurseId === nurse.id && item.shift === "D").length,
@@ -251,15 +294,30 @@ function computeMetrics(
     dataset.nurses.filter((item) => item.skillLevel === "MEMBER_L0").map((item) => item.id),
   );
   return {
-    offSatisfactionRate: offOutcomes.length
+    requestSatisfactionRate: !completeEvidence
+      ? 0
+      : outcomes.length
+        ? (outcomes.filter((item) => item.satisfied).length / outcomes.length) * 100
+        : 100,
+    offSatisfactionRate: !completeEvidence
+      ? 0
+      : offOutcomes.length
       ? (offOutcomes.filter((item) => item.satisfied).length / offOutcomes.length) * 100
       : 100,
-    o1SatisfactionRate: o1.length
+    o1SatisfactionRate: !completeEvidence
+      ? 0
+      : o1.length
       ? (o1.filter((item) => item.satisfied).length / o1.length) * 100
       : 100,
-    dayBalanceScore: scoreWithinComparableSkillGroups(dataset, dayCounts),
-    nightBalanceScore: scoreWithinComparableSkillGroups(dataset, nightCounts),
-    weekendBalanceScore: scoreWithinComparableSkillGroups(dataset, weekendCounts),
+    dayBalanceScore: completeEvidence
+      ? scoreWithinComparableSkillGroups(dataset, dayCounts)
+      : 0,
+    nightBalanceScore: completeEvidence
+      ? scoreWithinComparableSkillGroups(dataset, nightCounts)
+      : 0,
+    weekendBalanceScore: completeEvidence
+      ? scoreWithinComparableSkillGroups(dataset, weekendCounts)
+      : 0,
     memberL0Usage: clinical.filter((item) => l0Ids.has(item.nurseId)).length,
     hardConstraintsPassed: hard.filter((item) => item.status === "PASS").length,
     hardConstraintsTotal: hard.length,
@@ -280,6 +338,7 @@ export function solverResultToVersion(
       (request) =>
         request.nurseId === assignment.nurse_id &&
         request.date === assignment.assignment_date &&
+        (request.constraintMode ?? "LOCKED") === "LOCKED" &&
         ["VACATION", "EDUCATION"].includes(request.normalizedType),
     )
       ? "LOCKED_REQUEST"
@@ -325,6 +384,7 @@ export function makeGenerateResponse(
   dataset: ScheduleDataset,
   versions: ScheduleVersion[],
 ): GenerateScheduleResponse {
+  const validCount = versions.filter((version) => version.status === "VALID").length;
   return {
     dataset: {
       ...dataset,
@@ -332,7 +392,10 @@ export function makeGenerateResponse(
     },
     versions,
     mode: "solver",
-    message: `${versions.length} independently validated CP-SAT candidate${versions.length === 1 ? "" : "s"} generated.`,
+    message:
+      versions.length === 0
+        ? "No schedule candidates were generated."
+        : `${validCount} of ${versions.length} CP-SAT candidate${versions.length === 1 ? "" : "s"} passed hard validation.`,
   };
 }
 

@@ -4,7 +4,9 @@ Admin-only, privacy-aware nurse scheduling decision support built for OpenAI
 Build Week. NurseFlow turns a pseudonymous nurse request sheet into validated
 ICU roster candidates, explains trade-offs, records the selected version, and
 exports a review-ready workbook. The supplied MICU form is supported, but its
-employee-code and notes columns are discarded during import.
+employee-code and notes columns are discarded during import. Shift cells are
+treated as nurse preferences; staffing safety, skill mix, and sequence rules
+remain hard constraints.
 
 > **Project status:** public hackathon prototype. The source is open, but the
 > admin workspace is not anonymously accessible, and solver work endpoints
@@ -57,11 +59,11 @@ Sign in as administrator
   -> review every ambiguous value
   -> generate three CP-SAT candidates
   -> independently validate each candidate
-  -> compare requests, balance, and L0 usage
-  -> inspect assignment-level evidence
-  -> confirm one valid version
+  -> compare fulfilled and unmet requests, balance, and L0 usage
+  -> inspect assignment-level and hard-validation evidence
+  -> choose and confirm one eligible valid version
   -> persist immutable history when Supabase is configured
-  -> export a validated Excel workbook
+  -> export only a validated Excel workbook
 ```
 
 Key capabilities include:
@@ -74,8 +76,9 @@ Key capabilities include:
 - explicit human review for low-confidence or non-standard request notation;
 - three optimization profiles: request-first, balanced, and reduced Member L0
   utilization;
-- assignment evidence, unfulfilled-request explanations, validation results,
-  daily coverage, and workload metrics;
+- explicit trade-offs between preference satisfaction and operational goals,
+  with assignment evidence, unfulfilled-request explanations, validation
+  results, daily coverage, and workload metrics;
 - immutable Supabase confirmation history and archive export when persistence is
   configured;
 - a deterministic local fallback when OpenAI or Supabase is intentionally absent.
@@ -235,13 +238,19 @@ Supported request notation:
 
 | Input | Meaning |
 | --- | --- |
-| empty | Available for Day, Night, or OFF |
-| `O1` ... `O4` | Ranked OFF request |
-| `O/D`, `D/O` | OFF or Day |
-| `O/N`, `N/O` | OFF or Night |
-| `VAC` | Locked vacation |
-| `ED` | Locked education |
-| `D`, `N`, or an unknown token | Ambiguous until a human accepts the mapping |
+| empty | No explicit preference; available for Day, Night, or OFF |
+| `O1` ... `O4` | Ranked OFF preference |
+| `O/D`, `D/O` | OFF-or-Day preference |
+| `O/N`, `N/O` | OFF-or-Night preference |
+| `VAC` | Vacation preference |
+| `ED` | Education preference |
+| `D`, `N`, or an unknown token | Shift preference that is ambiguous until a human accepts the mapping |
+
+Every accepted scheduling value imported from a Sheet or workbook remains a
+preference, including `VAC` and `ED`; it can be left unmet when a hard safety
+rule requires another assignment. Imported cells never create hard locks.
+Explicit locked events are reserved for trusted internal or synthetic inputs
+that mark them as `LOCKED`.
 
 Imports with explicit first-name, last-name, or full-name headers are rejected,
 except for the exact MICU compatibility layout above; its display values must
@@ -257,20 +266,29 @@ FastAPI accepts at most 100 nurses, a 62-day period, and 6,200 requests or
 previous assignments. Pydantic rejects unknown fields and bounds identifiers,
 strings, staffing ranges, rule windows, time limits, and export assignments.
 
-The three candidate profiles use the same hard constraints but prioritize soft
-goals differently:
+The three candidate profiles use the same hard staffing, skill-mix, sequence,
+completeness, and configured Member L0 constraints. Nurse requests are scored
+preferences, and each profile prioritizes those preferences and other soft goals
+differently:
 
 | Profile | Primary intent |
 | --- | --- |
-| `requests_first` | Maximize ranked request satisfaction before balance goals |
+| `requests_first` | Maximize imported request satisfaction before other soft goals |
 | `balanced` | Balance request satisfaction, workloads, weekends, and skill usage |
 | `minimize_l0` | Reduce Member L0 clinical assignments while preserving feasibility |
 
 Hard validation covers assignment completeness, daily Day/Night coverage,
-skill mix, locked events, sequence limits, previous-month boundaries, and
-configured Member L0 limits. Candidate metrics cover request satisfaction,
-Day/Night distribution, weekend balance, Member L0 usage, and hard-rule pass
-counts. Invalid candidates cannot be confirmed or exported.
+skill mix, explicitly locked internal events, sequence limits, previous-month
+boundaries, and configured Member L0 limits. Candidate metrics cover overall
+and ranked request satisfaction, Day/Night distribution, weekend balance,
+Member L0 usage, and hard-rule pass counts. The administrator compares the
+three profiles and reviews unmet requests before choosing a version.
+
+Confirmation and export both fail closed. A version is eligible only when its
+status is `VALID`, it contains at least one hard-validation result, and every
+hard-validation result passes. `INFEASIBLE` or `INVALID` versions, empty
+validation evidence, and malformed validation data cannot be confirmed or
+exported.
 
 See [solver assumptions](services/solver/ASSUMPTIONS.md) for the explicit
 business-rule interpretations used by the prototype.
@@ -352,12 +370,12 @@ Read [the database guide](docs/database.md) before using a shared project.
 | `npm audit --audit-level=low` | npm dependency advisories |
 | `uv run --directory services/solver --extra dev --with pip-audit pip-audit` | Python dependency advisories |
 
-The current baseline contains 117 Vitest cases and 58 pytest tests. Coverage
-focuses on authentication, route protection, request limits, schema boundaries,
-import privacy checks, normalization, all three optimization profiles,
-cross-month validation, error sanitization, and spreadsheet formula safety.
-Browser QA is currently manual; no automated end-to-end browser suite is
-checked in.
+The suites cover authentication, route protection, request limits, schema
+boundaries, import privacy checks, preference semantics, all three optimization
+profiles, cross-month validation, confirmation and export eligibility, error
+sanitization, and spreadsheet formula safety. Browser QA is currently manual;
+no automated end-to-end browser suite is checked in. Run the commands above for
+the current test totals instead of copying counts into documentation.
 
 The pull-request workflow runs lint, type checking, both test suites, and the
 production build with live OpenAI and Supabase credentials explicitly absent.

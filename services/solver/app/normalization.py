@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 
-from .models import DailyRequest, ShiftCode
+from .models import DailyRequest, RequestConstraintMode, ShiftCode
 
 
 class NormalizationStatus(str, Enum):
@@ -29,6 +29,7 @@ class NormalizedRequest:
     canonical_value: str
     status: NormalizationStatus
     kind: RequestKind
+    constraint_mode: RequestConstraintMode
     allowed_assignments: frozenset[ShiftCode] | None = None
     locked_shift: ShiftCode | None = None
     off_priority: int | None = None
@@ -72,15 +73,24 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
         allowed = (
             frozenset(resolution.allowed_assignments)
             if resolution.allowed_assignments
-            else None
+            else (
+                frozenset({resolution.locked_shift})
+                if resolution.locked_shift is not None
+                else None
+            )
         )
         return NormalizedRequest(
             raw_value=raw_value,
             canonical_value=canonical,
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.RESOLVED,
+            constraint_mode=request.constraint_mode,
             allowed_assignments=allowed,
-            locked_shift=resolution.locked_shift,
+            locked_shift=(
+                resolution.locked_shift
+                if request.constraint_mode == RequestConstraintMode.LOCKED
+                else None
+            ),
             off_priority=resolution.off_priority,
             note="Human-approved resolution",
         )
@@ -91,6 +101,7 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
             canonical_value=canonical,
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.AVAILABLE,
+            constraint_mode=request.constraint_mode,
         )
 
     fixed_aliases = {
@@ -111,18 +122,25 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
             canonical_value=canonical,
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.FIXED,
+            constraint_mode=request.constraint_mode,
             allowed_assignments=frozenset({shift}),
-            locked_shift=shift,
+            locked_shift=(
+                shift
+                if request.constraint_mode == RequestConstraintMode.LOCKED
+                else None
+            ),
         )
 
     off_match = re.fullmatch(r"O([1-4])", canonical)
-    if off_match:
+    if off_match or canonical in {"O", "OFF"}:
         return NormalizedRequest(
             raw_value=raw_value,
             canonical_value=canonical,
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.OFF_REQUEST,
-            off_priority=int(off_match.group(1)),
+            constraint_mode=request.constraint_mode,
+            allowed_assignments=frozenset({ShiftCode.OFF}),
+            off_priority=int(off_match.group(1)) if off_match else 4,
         )
 
     if canonical in {"O/D", "D/O", "OFF/D", "D/OFF"}:
@@ -131,6 +149,7 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
             canonical_value="O/D",
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.FLEXIBLE,
+            constraint_mode=request.constraint_mode,
             allowed_assignments=frozenset({ShiftCode.OFF, ShiftCode.DAY}),
         )
 
@@ -140,6 +159,7 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
             canonical_value="O/N",
             status=NormalizationStatus.NORMALIZED,
             kind=RequestKind.FLEXIBLE,
+            constraint_mode=request.constraint_mode,
             allowed_assignments=frozenset({ShiftCode.OFF, ShiftCode.NIGHT}),
         )
 
@@ -154,5 +174,6 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
         canonical_value=canonical,
         status=NormalizationStatus.NEEDS_REVIEW,
         kind=RequestKind.AMBIGUOUS,
+        constraint_mode=request.constraint_mode,
         note=note,
     )

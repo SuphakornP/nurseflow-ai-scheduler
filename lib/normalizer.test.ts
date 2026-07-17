@@ -31,4 +31,13 @@ describe("normalizeRequestValue", () => {
     expect(normalizeRequestValue("O1/N", "n1", "2026-08-01").requiresReview).toBe(true);
     expect(normalizeRequestValue("D1", "n1", "2026-08-01").requiresReview).toBe(true);
   });
+
+  it("keeps approved values locked by default and can mark imported values as preferences", () => {
+    expect(normalizeRequestValue("D", "n1", "2026-08-01").constraintMode).toBe(
+      "LOCKED",
+    );
+    expect(
+      normalizeRequestValue("D", "n1", "2026-08-01", "PREFERENCE").constraintMode,
+    ).toBe("PREFERENCE");
+  });
 });

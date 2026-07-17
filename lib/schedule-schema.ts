@@ -54,6 +54,7 @@ const ShiftRequestSchema = z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)])
       .optional(),
     allowedAssignments: z.array(ShiftCodeSchema).max(5),
+    constraintMode: z.enum(["PREFERENCE", "LOCKED"]).optional(),
     confidence: z.number().min(0).max(1),
     requiresReview: z.boolean(),
   })

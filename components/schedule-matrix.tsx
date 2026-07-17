@@ -85,12 +85,15 @@ export function ScheduleMatrix({
     const day = Number(date.slice(-2));
     return day >= rangeStart && day <= rangeEnd;
   });
+  const rosterDescription = nurses.every((nurse) => nurse.synthetic === true)
+    ? "synthetic nickname-only staff records"
+    : "nickname-only imported request records";
 
   return (
     <div className="schedule-scroller" tabIndex={0} aria-label="Schedule matrix scroll area">
       <table className="schedule-table">
         <caption className="sr-only">
-          August 2026 nurse schedule for {nurses.length} synthetic nickname-only staff records.
+          August 2026 nurse schedule for {nurses.length} {rosterDescription}.
         </caption>
         <thead>
           <tr>

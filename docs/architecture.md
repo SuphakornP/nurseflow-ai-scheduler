@@ -6,23 +6,28 @@ NurseFlow separates probabilistic language work from deterministic scheduling wo
 
 ```mermaid
 flowchart LR
-    A[Nickname-only Sheet or Excel] --> B[Deterministic parser]
+    A[Pseudonymous request Sheet or Excel] --> B[Deterministic parser]
     B --> C[AI ambiguity suggestions]
     C --> D[Human review]
     D --> E[CP-SAT optimizer]
+    R[Hard staffing, skill, and sequence rules] --> E
     E --> F[Independent validator]
     F --> G[Candidate versions]
-    G --> H{Scheduler decision}
+    G --> H{Admin review}
     H -->|regenerate| E
-    H -->|confirm| I[Supabase version record]
-    I --> J[Excel export]
+    H -->|choose eligible version| I[Fail-closed approval gate]
+    I -->|confirm| S[Supabase version record]
+    I -->|export| J[Validated Excel workbook]
 ```
 
 - The parser handles casing, whitespace, aliases, and known request syntax before AI is called.
+- Sheet cells are nurse preferences, including leave and education requests; they do not override hard staffing, skill-mix, completeness, or sequence rules.
+- The importer never creates hard locks. `LOCKED` is reserved for an explicit trusted administrator decision or a controlled synthetic fixture.
 - GPT-5.6 Terra sees only ambiguous tokens or structured reason facts, never full source rows.
 - CP-SAT is the only component allowed to create a complete roster.
 - The validator re-computes every hard rule from assignments and previous-month context.
-- Confirmation requires all hard validations to pass and is executed atomically in Postgres.
+- The administrator compares three optimization profiles, including unmet requests, before choosing a version.
+- Confirmation and export require `VALID` status plus a nonempty, entirely passing hard-validation set. Confirmation is executed atomically in Postgres when persistence is configured.
 
 ## Runtime components
 
@@ -64,7 +69,7 @@ The browser never calls the solver directly. FastAPI does not enable CORS; Next.
 - Solver unavailable: API returns a client-safe `503` without exposing service configuration.
 - Missing or invalid admin configuration: login fails closed with `503`; anonymous pages redirect to `/login` and anonymous APIs return `401`.
 - Missing or invalid solver token: work endpoints fail closed; the solver health check remains minimal and public for service orchestration.
-- Infeasible dataset: no synthetic success response; the service returns diagnostics and blocks confirmation.
+- Infeasible datasets or missing/malformed hard-validation evidence: no synthetic success response; confirmation and export remain blocked.
 - OpenAI failure with a configured key: API returns `502`; it does not silently present a generated explanation as an AI result.
 
 ## Deployment shape

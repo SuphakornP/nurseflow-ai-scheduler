@@ -160,6 +160,7 @@ function makeMetrics(
   memberL0Usage: number,
 ): VersionMetrics {
   return {
+    requestSatisfactionRate: offSatisfactionRate,
     offSatisfactionRate,
     o1SatisfactionRate: 100,
     dayBalanceScore,

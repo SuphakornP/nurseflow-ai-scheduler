@@ -153,6 +153,9 @@ describe("parseWorkbook", () => {
     expect(dataset.previousAssignments).toHaveLength(6);
     expect(dataset.requests).toHaveLength(62);
     expect(dataset.requests[0]).toMatchObject({ rawValue: "O1", priority: 1 });
+    expect(dataset.requests.every((request) => request.constraintMode === "PREFERENCE")).toBe(
+      true,
+    );
   });
 
   it("rejects worksheets containing legal-name columns", async () => {
@@ -184,6 +187,9 @@ describe("parseWorkbook", () => {
       { date: "2026-07-31", shift: "OFF" },
     ]);
     expect(dataset.requests).toHaveLength(155);
+    expect(dataset.requests.every((request) => request.constraintMode === "PREFERENCE")).toBe(
+      true,
+    );
 
     const serialized = JSON.stringify(dataset);
     for (const staff of LIVE_SHEET_STAFF) {

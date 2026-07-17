@@ -22,9 +22,13 @@ const SolverProblemSchema = z.object({
       nurse_id: z.string(),
       request_date: z.string(),
       raw_value: z.string(),
+      // Historical confirmed versions predate explicit request semantics and
+      // used fixed values, so preserve those as locks during reconstruction.
+      constraint_mode: z.enum(["PREFERENCE", "LOCKED"]).default("LOCKED"),
       resolution: z
         .object({
-          allowed_assignments: z.array(ShiftSchema),
+          allowed_assignments: z.array(ShiftSchema).optional(),
+          locked_shift: ShiftSchema.nullable().optional(),
           off_priority: z.number().nullable().optional(),
         })
         .optional(),
