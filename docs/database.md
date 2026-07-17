@@ -2,9 +2,14 @@
 
 ## Purpose
 
-The Supabase database is the source of truth for schedule inputs, generated
-candidate versions, validation evidence, confirmations, and export history.
-The schema is designed for Supabase Postgres 17 and a nickname-only showcase:
+The Supabase schema is designed to become the source of truth for schedule
+inputs, generated candidate versions, validation evidence, confirmations, and
+export history. The current application persists candidates and confirmations,
+but the import route does not yet transactionally synchronize roster rows,
+requests, or previous assignments. Its showcase bridge therefore requires a
+matching period roster to be staged before confirmation.
+
+The schema targets Supabase Postgres 17 and a pseudonymous showcase:
 `employees` contains `nickname` but deliberately has no legal-name, employee
 number, email, phone, patient, or clinical-record fields.
 
@@ -14,8 +19,10 @@ The local artifacts are:
 - `supabase/seed.sql`
 - `supabase/config.toml`
 
-No migration in this repository has been applied to the connected remote
-project.
+Migration deployment is an explicit operator action; this repository has no
+automatic remote migration workflow. Treat the checked-in migration as the
+canonical schema and verify any connected project's migration history before
+using it.
 
 ## Data ownership
 
@@ -34,6 +41,10 @@ a parent in another department or scheduling period.
 
 `schedule_period_employees` snapshots the nickname and skill code. Historical
 schedules therefore do not change if an employee master record changes later.
+
+The input tables and import ordering below describe the target persistence
+contract. The current `/api/import` route returns a browser dataset and does not
+write `schedule_imports`, `schedule_requests`, or `previous_assignments`.
 
 ## Audit contract
 
@@ -76,6 +87,11 @@ Roles are:
 - `SCHEDULER`: manages nickname-only employees, periods, and schedule inputs.
 - `REVIEWER`: reads department data and may confirm a valid candidate.
 - `VIEWER`: read-only department access.
+
+These database roles support a future managed-auth client. The Build Week web
+workspace itself authenticates one environment-configured administrator and
+uses server-side Supabase credentials; "admin-only" in product copy refers to
+that web boundary, not to eliminating the schema's other roles.
 
 Users can read only their own membership row. Membership provisioning is a
 trusted server/admin operation, which avoids self-service role escalation. RLS

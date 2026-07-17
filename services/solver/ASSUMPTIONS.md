@@ -57,8 +57,10 @@ as far as coverage permits, while Vacation remains hard.
 - Common casing, whitespace, `Vac`, Thai `\u0e0aED`, `D/O`, and `N/O` variants are
   normalized deterministically.
 - Thai Buddhist year 2569 is parsed as Gregorian year 2026.
-- Nickname is the only display identity. Internal IDs are pseudonymous codes;
-  nicknames are never used as keys because duplicates are possible.
+- Nickname is the only display identity. Solver payloads use generated
+  pseudonymous IDs, but the current importer derives them from period plus
+  nickname and the persistence bridge maps by normalized nickname. Duplicate
+  nicknames are rejected. Stable identity across renames is future work.
 - The solver never calls an LLM and never needs an OpenAI key. AI interpretation
   and explanation belong in the application layer and should receive only the
   minimum pseudonymized structured data.

@@ -1,0 +1,66 @@
+# Devpost Demo Recording Runbook
+
+Use this runbook to produce the required public YouTube demo and supporting images without exposing staff data, secrets, or repeatedly consuming OpenAI credits.
+
+## Capture guardrails
+
+- Use only the built-in synthetic MICU dataset. Do not show the real Google Sheet URL, employee codes, notes, browser history, terminal environment, or Supabase records containing real pseudonyms.
+- Rehearse with `OPENAI_API_KEY` unset so normalization and explanations use deterministic fallbacks. For the final take, enable the key only if a live GPT-5.6 interaction materially improves the demo.
+- If showing live AI with the built-in dataset, make one explanation request in the final take. A normalization request is needed only if a separate privacy-reviewed synthetic import is recorded. Solver generation and Excel export are local and do not use OpenAI credits.
+- Hide notifications, password managers, developer tools, and browser autofill. Use a throwaway admin account and verify every frame before publishing.
+- Keep the OpenAI Build Week submission unsubmitted. Recording and uploading media do not authorize submission.
+
+## Three-minute shot and voiceover plan
+
+| Time | Screen | Voiceover focus |
+| --- | --- | --- |
+| `0:00-0:15` | Login and product title | ICU scheduling problem and accountable human decision-maker |
+| `0:15-0:38` | Reload built-in synthetic demo | Pseudonymous intake; employee-code and notes columns are discarded |
+| `0:38-1:08` | Compare generated candidates | Three CP-SAT profiles and independent hard-rule validation |
+| `1:08-1:33` | Explain one outcome | One bounded GPT-5.6 explanation from structured solver evidence |
+| `1:33-1:58` | Evidence and metrics | Request satisfaction, coverage, skill mix, and assignment reasons |
+| `1:58-2:18` | Confirm and export | Fail-closed confirmation, optional persisted history, and workbook export |
+| `2:18-2:42` | Architecture or README | Exact roles of Codex and GPT-5.6 |
+| `2:42-2:50` | Product close | Faster reconciliation without autonomous staffing decisions |
+
+This plan records the built-in synthetic dataset. It can demonstrate the
+evidence-explanation path, but not ambiguous-token normalization because the demo
+snapshot is already normalized. If import footage is important, prepare a
+separate synthetic MICU-format Sheet or workbook with an ambiguous token and
+privacy-review it before recording; never open the real request form on screen.
+
+### Narration draft
+
+Nurse scheduling combines coverage, skill mix, leave, prior shifts, and individual requests. NurseFlow AI helps an experienced scheduler reconcile those inputs without handing the final decision to a model.
+
+The app can import a pseudonymous request sheet. The supplied MICU layout is supported, but employee codes and notes are dropped during import. Known request notation is parsed deterministically. When a token is ambiguous, GPT-5.6 uses Structured Outputs to suggest a bounded interpretation, and the administrator must review it.
+
+After review, a private FastAPI service runs Google OR-Tools CP-SAT to create three candidates: request-first, balanced, and reduced Member L0 utilization. GPT-5.6 does not generate the roster. A separate deterministic validator recomputes coverage, skill mix, locked events, sequence limits, and completeness for every candidate.
+
+The workspace makes trade-offs visible. The scheduler can compare request satisfaction and workload, inspect assignment-level evidence, and see why a request could not be fulfilled. Confirm is fail-closed: only a `VALID` result with at least one passing hard validation can be approved. The chosen version is exported as a formula-safe workbook and, when Supabase has a matching staged roster, recorded as immutable schedule history.
+
+Codex accelerated the cross-stack implementation, architecture review, authentication, security hardening, tests, browser QA, and documentation. GPT-5.6 is deliberately limited to ambiguous-language interpretation and evidence-grounded explanations. Constraint solving decides feasibility, independent validation checks correctness, and a human remains accountable.
+
+NurseFlow turns a difficult spreadsheet workflow into a reviewable decision-support process while keeping privacy and safety boundaries visible.
+
+## Submission media
+
+Prepare these from a clean synthetic run and review them at full resolution before upload:
+
+| Asset | Suggested frame |
+| --- | --- |
+| Thumbnail | Product name plus a clean schedule matrix; no credentials or row-level identities |
+| Screenshot 1 | Admin access checkpoint |
+| Screenshot 2 | Import and ambiguous-value review |
+| Screenshot 3 | Candidate comparison with hard validations visible |
+| Screenshot 4 | Confirmation/history or exported workbook summary |
+
+Existing ignored mobile QA captures are not submission assets. Do not promote them without a new privacy review, and add final media to the repository only after confirming it contains synthetic data.
+
+## Final upload QA
+
+- Video is public on YouTube, shorter than 3:00, and has intelligible voiceover.
+- Voiceover explicitly covers what was built, how Codex was used, and how GPT-5.6 was used.
+- No employee code, real nickname, note, secret, private URL, or credential appears in video, captions, thumbnail, or screenshots.
+- Repository and demo links work in a signed-out browser; judge credentials exist only in Devpost's private field.
+- The final Devpost submit action remains reserved for the owner's review.
