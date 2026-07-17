@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 
-from .models import DailyRequest, RequestConstraintMode, ShiftCode
+from .models import DailyRequest, RequestConstraintMode, ShiftCode, SkillLevel
 
 
 class NormalizationStatus(str, Enum):
@@ -34,6 +35,16 @@ class NormalizedRequest:
     locked_shift: ShiftCode | None = None
     off_priority: int | None = None
     note: str | None = None
+
+
+@dataclass(frozen=True)
+class RequestedOffBlock:
+    """A maximal contiguous run of explicit OFF requests and locked Vacation."""
+
+    nurse_id: str
+    dates: tuple[date, ...]
+    off_dates: tuple[date, ...]
+    vacation_dates: tuple[date, ...]
 
 
 def canonicalize(raw_value: str) -> str:
@@ -177,3 +188,87 @@ def normalize_request(request: DailyRequest) -> NormalizedRequest:
         constraint_mode=request.constraint_mode,
         note=note,
     )
+
+
+def request_semantics_error(
+    normalized: NormalizedRequest,
+    skill_level: SkillLevel,
+) -> str | None:
+    """Return a business-contract error for an unsupported mode/value pairing."""
+
+    allowed = normalized.allowed_assignments or frozenset()
+    if allowed == frozenset({ShiftCode.VACATION}):
+        if normalized.constraint_mode != RequestConstraintMode.LOCKED:
+            return "Vacation must use LOCKED mode"
+        return None
+
+    if allowed == frozenset({ShiftCode.EDUCATION}):
+        if normalized.constraint_mode == RequestConstraintMode.LOCKED:
+            return None
+        if (
+            skill_level == SkillLevel.MEMBER_L0
+            and normalized.constraint_mode == RequestConstraintMode.PREFERENCE
+        ):
+            return None
+        return "Education must be LOCKED for ordinary staff or PREFERENCE for Member L0"
+
+    if normalized.kind == RequestKind.FLEXIBLE:
+        if normalized.constraint_mode not in {
+            RequestConstraintMode.REQUIRED,
+            RequestConstraintMode.LOCKED,
+        }:
+            return "O/D and O/N must use REQUIRED mode"
+        return None
+
+    if (
+        normalized.constraint_mode == RequestConstraintMode.REQUIRED
+        and normalized.kind != RequestKind.RESOLVED
+    ):
+        return "REQUIRED mode needs O/D, O/N, or an explicit human resolution"
+    return None
+
+
+def find_long_off_blocks(
+    prepared_requests: dict[tuple[str, date], NormalizedRequest],
+    *,
+    minimum_length: int = 5,
+) -> list[RequestedOffBlock]:
+    """Find maximal requested OFF/locked-VAC runs subject to the one-cut rule."""
+
+    requested: dict[str, list[tuple[date, bool]]] = defaultdict(list)
+    for (nurse_id, request_date), normalized in prepared_requests.items():
+        allowed = normalized.allowed_assignments or frozenset()
+        is_off = (
+            normalized.kind == RequestKind.OFF_REQUEST
+            and allowed == frozenset({ShiftCode.OFF})
+        )
+        is_vacation = (
+            normalized.constraint_mode == RequestConstraintMode.LOCKED
+            and allowed == frozenset({ShiftCode.VACATION})
+        )
+        if is_off or is_vacation:
+            requested[nurse_id].append((request_date, is_vacation))
+
+    blocks: list[RequestedOffBlock] = []
+    for nurse_id, values in requested.items():
+        current: list[tuple[date, bool]] = []
+
+        def finish() -> None:
+            if len(current) < minimum_length:
+                return
+            blocks.append(
+                RequestedOffBlock(
+                    nurse_id=nurse_id,
+                    dates=tuple(item[0] for item in current),
+                    off_dates=tuple(item[0] for item in current if not item[1]),
+                    vacation_dates=tuple(item[0] for item in current if item[1]),
+                )
+            )
+
+        for request_date, is_vacation in sorted(values):
+            if current and request_date != current[-1][0] + timedelta(days=1):
+                finish()
+                current = []
+            current.append((request_date, is_vacation))
+        finish()
+    return blocks

@@ -1,16 +1,61 @@
+import base64
+import logging
 from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill
 
-from app.export import build_workbook
+from app.export import WorkbookTemplateError, build_workbook
 from app.main import app
-from app.models import OptimizationProfile
+from app.models import OptimizationProfile, ShiftCode, SourceWorkbookTemplate
 
 
 SOLVER_API_TOKEN = "solver-test-token-with-at-least-32-characters"
 AUTH_HEADERS = {"Authorization": f"Bearer {SOLVER_API_TOKEN}"}
+
+
+def _source_template(problem, worksheet_name: str = "คำขอเวร") -> SourceWorkbookTemplate:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = worksheet_name
+    worksheet["A1"] = "MICU August request template"
+    worksheet["A2"] = "รหัสพนักงาน"
+    worksheet["B2"] = "ชื่อ - สกุล"
+    worksheet["C2"] = "Level"
+    for offset, day in enumerate((29, 30, 31), start=4):
+        worksheet.cell(row=2, column=offset, value=day)
+    dates = [
+        problem.period_start.fromordinal(problem.period_start.toordinal() + offset)
+        for offset in range((problem.period_end - problem.period_start).days + 1)
+    ]
+    date_columns = {}
+    for column, assignment_date in enumerate(dates, start=7):
+        worksheet.cell(row=2, column=column, value=assignment_date.day)
+        date_columns[assignment_date] = column
+    worksheet.cell(row=2, column=38, value="หมายเหตุ")
+
+    nurse_rows = {}
+    for row, nurse in enumerate(problem.nurses, start=3):
+        nurse_rows[nurse.id] = row
+        worksheet.cell(row=row, column=1, value=None)
+        worksheet.cell(row=row, column=2, value=nurse.nickname)
+        worksheet.cell(row=row, column=3, value=nurse.skill_level.value)
+        worksheet.cell(row=row, column=4, value="D")
+        worksheet.cell(row=row, column=5, value="N")
+        worksheet.cell(row=row, column=6, value="OFF")
+        worksheet.cell(row=row, column=38, value=None)
+    worksheet.cell(row=3, column=7).fill = PatternFill("solid", fgColor="C6E0B4")
+
+    output = BytesIO()
+    workbook.save(output)
+    return SourceWorkbookTemplate(
+        content_base64=base64.b64encode(output.getvalue()).decode("ascii"),
+        worksheet_name=worksheet.title,
+        nurse_rows=nurse_rows,
+        date_columns=date_columns,
+    )
 
 
 def test_health_is_public_and_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,6 +130,64 @@ def test_correct_bearer_token_allows_demo(monkeypatch: pytest.MonkeyPatch) -> No
     assert all("first_name" not in nurse and "last_name" not in nurse for nurse in body["nurses"])
 
 
+def test_generate_input_rejection_is_sanitized_and_logged(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOLVER_API_TOKEN", SOLVER_API_TOKEN)
+    client = TestClient(app)
+    problem = client.get("/demo", headers=AUTH_HEADERS).json()
+    private_value = "EMP-SECRET-77 NursePrivate raw-token-Z"
+    private_nurse_id = problem["requests"][0]["nurse_id"]
+    problem["requests"][0]["raw_value"] = private_value
+    problem["requests"][0].pop("resolution", None)
+
+    with caplog.at_level(logging.WARNING, logger="nurseflow.solver"):
+        response = client.post(
+            "/generate",
+            json=problem,
+            headers={**AUTH_HEADERS, "x-request-id": "safe-request-123"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "issue_count": 1,
+            "reason_codes": ["UNRESOLVED_REQUEST"],
+        }
+    }
+    assert "solver.generate.input_rejected" in caplog.text
+    assert "safe-request-123" in caplog.text
+    assert private_value not in response.text
+    assert private_value not in caplog.text
+    assert private_nurse_id not in response.text
+    assert private_nurse_id not in caplog.text
+
+
+def test_request_schema_rejection_is_sanitized_and_logged(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SOLVER_API_TOKEN", SOLVER_API_TOKEN)
+    private_value = "EMP-SECRET-88 NursePrivate schema-input"
+
+    with caplog.at_level(logging.WARNING, logger="nurseflow.solver"):
+        response = TestClient(app).post(
+            "/generate",
+            json={"period_start": "not-a-date", "nurses": [{"id": private_value}]},
+            headers={**AUTH_HEADERS, "x-request-id": "safe-schema-123"},
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["reason_codes"] == ["PAYLOAD_VALIDATION"]
+    assert detail["issue_count"] >= 1
+    assert "solver.request.schema_rejected" in caplog.text
+    assert "safe-schema-123" in caplog.text
+    assert private_value not in response.text
+    assert private_value not in caplog.text
+
+
 def test_demo_solver_passes_independent_validation(generated_demo) -> None:
     problem, result = generated_demo
     expected_assignments = len(problem.nurses) * 31
@@ -134,6 +237,63 @@ def test_excel_contains_required_audit_sheets(generated_demo) -> None:
         "Metadata",
     ]
     assert workbook["Metadata"]["B7"].value == "Nickname and pseudonymous internal ID only"
+
+
+def test_excel_preserves_sanitized_source_layout_and_styles(generated_demo) -> None:
+    problem, result = generated_demo
+    assert result.validation is not None
+    template = _source_template(problem)
+
+    content = build_workbook(
+        problem,
+        result.assignments,
+        result.summaries,
+        result.validation,
+        template,
+    )
+    workbook = load_workbook(BytesIO(content), data_only=False)
+    worksheet = workbook["คำขอเวร"]
+    first_assignment = next(
+        item
+        for item in result.assignments
+        if item.nurse_id == problem.nurses[0].id
+        and item.assignment_date == problem.period_start
+    )
+    expected_label = {
+        ShiftCode.DAY: "D",
+        ShiftCode.NIGHT: "N",
+        ShiftCode.OFF: "OFF",
+        ShiftCode.VACATION: "Vac",
+        ShiftCode.EDUCATION: "ชED",
+    }[first_assignment.shift]
+
+    assert workbook.sheetnames == [
+        "คำขอเวร",
+        "Summary",
+        "Validation",
+        "Unfulfilled Requests",
+        "Metadata",
+    ]
+    assert worksheet["A1"].value == "MICU August request template"
+    assert worksheet["D3"].value == "D"
+    assert worksheet["G3"].value == expected_label
+    assert worksheet["G3"].fill.fgColor.rgb.endswith("C6E0B4")
+    assert worksheet["A3"].value is None
+    assert worksheet["AL3"].value is None
+
+
+def test_excel_rejects_case_insensitive_reserved_source_sheet_name(generated_demo) -> None:
+    problem, result = generated_demo
+    assert result.validation is not None
+
+    with pytest.raises(WorkbookTemplateError):
+        build_workbook(
+            problem,
+            result.assignments,
+            result.summaries,
+            result.validation,
+            _source_template(problem, "summary"),
+        )
 
 
 def test_excel_escapes_formula_like_attacker_controlled_text(generated_demo) -> None:

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireAdminRequest } from "@/lib/auth/request";
-import { callSolver, SolverUnavailableError } from "@/lib/solver-client";
+import {
+  callSolver,
+  SolverRejectedError,
+  SolverUnavailableError,
+} from "@/lib/solver-client";
 import { cacheSchedule } from "@/lib/schedule-cache";
 import {
   datasetToSolverProblem,
@@ -15,9 +19,58 @@ import { ScheduleDatasetSchema } from "@/lib/schedule-schema";
 export const maxDuration = 120;
 const MAX_GENERATE_REQUEST_BYTES = 5 * 1024 * 1024;
 
+function logProfileFailure(
+  error: unknown,
+  context: {
+    requestId: string;
+    profile: OptimizationProfile;
+    durationMs: number;
+    nurseCount: number;
+    requestCount: number;
+    previousAssignmentCount: number;
+  },
+) {
+  const common = {
+    event: "solver.generate.failed",
+    requestId: context.requestId,
+    profile: context.profile,
+    durationMs: context.durationMs,
+    nurseCount: context.nurseCount,
+    requestCount: context.requestCount,
+    previousAssignmentCount: context.previousAssignmentCount,
+  };
+
+  if (error instanceof SolverRejectedError) {
+    console.warn(
+      JSON.stringify({
+        ...common,
+        classification: "INPUT_REJECTED",
+        retryable: false,
+        upstreamStatus: error.status,
+        upstreamPath: error.path,
+        diagnostic: error.diagnostic,
+      }),
+    );
+    return;
+  }
+
+  console.error(
+    JSON.stringify({
+      ...common,
+      classification:
+        error instanceof SolverUnavailableError ? "SOLVER_UNAVAILABLE" : "INTERNAL_ERROR",
+      retryable: error instanceof SolverUnavailableError,
+      upstreamStatus:
+        error instanceof SolverUnavailableError ? (error.status ?? null) : null,
+    }),
+  );
+}
+
 export async function POST(request: Request) {
   const auth = await requireAdminRequest(request, { sameOrigin: true });
   if (!auth.ok) return auth.response;
+
+  const requestId = crypto.randomUUID();
 
   let payload: unknown;
   try {
@@ -52,33 +105,53 @@ export async function POST(request: Request) {
     );
   }
   const dataset = parsed.data;
+  const profiles: OptimizationProfile[] = ["requests_first", "balanced", "minimize_l0"];
 
   try {
-    const profiles: OptimizationProfile[] = ["requests_first", "balanced", "minimize_l0"];
     const results = await Promise.all(
-      profiles.map((profile) =>
-        callSolver<SolverGenerateResponse>("/generate", {
-          method: "POST",
-          body: JSON.stringify(datasetToSolverProblem(dataset, profile)),
-        }),
-      ),
+      profiles.map(async (profile) => {
+        const startedAt = performance.now();
+        try {
+          return await callSolver<SolverGenerateResponse>("/generate", {
+            method: "POST",
+            headers: { "x-request-id": requestId },
+            body: JSON.stringify(datasetToSolverProblem(dataset, profile)),
+          });
+        } catch (error) {
+          logProfileFailure(error, {
+            requestId,
+            profile,
+            durationMs: Math.round(performance.now() - startedAt),
+            nurseCount: dataset.nurses.length,
+            requestCount: dataset.requests.length,
+            previousAssignmentCount: dataset.previousAssignments.length,
+          });
+          throw error;
+        }
+      }),
     );
     const versions = results.map((result, index) =>
       solverResultToVersion(dataset, result, profiles[index], index + 1),
     );
     const response = makeGenerateResponse(dataset, versions);
     cacheSchedule(response);
-    return NextResponse.json(response);
+    return NextResponse.json(response, { headers: { "x-request-id": requestId } });
   } catch (error) {
+    const inputRejected = error instanceof SolverRejectedError;
     const serviceUnavailable = error instanceof SolverUnavailableError;
     return NextResponse.json(
       {
-        error: "GENERATION_FAILED",
-        message: serviceUnavailable
-          ? "Schedule generation is temporarily unavailable. Try again shortly."
-          : "The schedule could not be generated from this dataset. Review constraints and try again.",
+        error: inputRejected ? "SOLVER_INPUT_REJECTED" : "GENERATION_FAILED",
+        message: inputRejected
+          ? "The solver rejected the normalized request set. Review unresolved values and request rules, then try again."
+          : serviceUnavailable
+            ? "Schedule generation is temporarily unavailable. Try again shortly."
+            : "The schedule could not be generated because of an internal error. Try again.",
       },
-      { status: serviceUnavailable ? 503 : 422 },
+      {
+        status: inputRejected ? 422 : serviceUnavailable ? 503 : 500,
+        headers: { "x-request-id": requestId },
+      },
     );
   }
 }

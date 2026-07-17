@@ -34,7 +34,23 @@ vi.mock("@/lib/solver-adapter", () => ({
 }));
 vi.mock("@/lib/solver-client", () => {
   class SolverUnavailableError extends Error {}
+  class SolverRejectedError extends Error {
+    readonly status = 422;
+    constructor(
+      readonly path: string,
+      readonly diagnostic: {
+        kind: string;
+        issueCount: number;
+        reasonCodes: string[];
+        fieldPaths: string[];
+        issueTypes: string[];
+      },
+    ) {
+      super("Solver rejected input");
+    }
+  }
   return {
+    SolverRejectedError,
     SolverUnavailableError,
     callSolver: vi.fn(),
     callSolverBinary: vi.fn(),
@@ -52,11 +68,18 @@ import { POST as normalize } from "@/app/api/normalize/route";
 import { explainScheduleOutcome } from "@/lib/openai-explanation";
 import { suggestNormalizations } from "@/lib/openai-normalization";
 import { getCachedSchedule } from "@/lib/schedule-cache";
-import { callSolver, callSolverBinary, SolverUnavailableError } from "@/lib/solver-client";
+import {
+  callSolver,
+  callSolverBinary,
+  SolverRejectedError,
+  SolverUnavailableError,
+} from "@/lib/solver-client";
 import { createAdminClient, isSupabaseConfigured } from "@/lib/supabase/admin";
 import { persistAndConfirmSchedule } from "@/lib/supabase/persistence";
 
 const INTERNAL_DETAIL = "provider-internal-detail: upstream stack context";
+const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 const POST_HEADERS = { "content-type": "application/json", origin: "http://localhost" };
 const VALID_DATASET = {
   period: {
@@ -240,6 +263,37 @@ describe("API provider error sanitization", () => {
         message: "Schedule generation is temporarily unavailable. Try again shortly.",
       },
     );
+    expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(INTERNAL_DETAIL);
+
+    const rejected = Object.assign(
+      new SolverRejectedError("/generate", {
+        kind: "input_problem",
+        issueCount: 2,
+        reasonCodes: ["UNRESOLVED_REQUEST"],
+        fieldPaths: [],
+        issueTypes: [],
+      }),
+      { privateDetail: INTERNAL_DETAIL },
+    );
+    vi.mocked(callSolver).mockRejectedValue(rejected);
+    const rejectedResponse = await generate(
+      postRequest("/api/generate", { dataset: VALID_DATASET }),
+    );
+    await expectSanitized(rejectedResponse, {
+      status: 422,
+      error: "SOLVER_INPUT_REJECTED",
+      message:
+        "The solver rejected the normalized request set. Review unresolved values and request rules, then try again.",
+    });
+    expect(rejectedResponse.headers.get("x-request-id")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f-]{27}$/,
+    );
+    const warningLog = JSON.stringify(warnSpy.mock.calls);
+    expect(warningLog).toContain("solver.generate.failed");
+    expect(warningLog).toContain("INPUT_REJECTED");
+    expect(warningLog).toContain("UNRESOLVED_REQUEST");
+    expect(warningLog).not.toContain(INTERNAL_DETAIL);
 
     vi.mocked(callSolver).mockRejectedValue(new Error(INTERNAL_DETAIL));
     await expectSanitized(await demo(postRequest("/api/demo")), {
@@ -250,9 +304,9 @@ describe("API provider error sanitization", () => {
     await expectSanitized(
       await generate(postRequest("/api/generate", { dataset: VALID_DATASET })),
       {
-        status: 422,
+        status: 500,
         error: "GENERATION_FAILED",
-        message: "The schedule could not be generated from this dataset. Review constraints and try again.",
+        message: "The schedule could not be generated because of an internal error. Try again.",
       },
     );
   });

@@ -17,23 +17,33 @@ from app.normalization import (
 
 
 @pytest.mark.parametrize("raw", ["Vac", " VAC ", "vac", "Vacation"])
-def test_vacation_aliases_are_preferences_by_default(raw: str) -> None:
+def test_vacation_aliases_are_locked_when_approved(raw: str) -> None:
     result = normalize_request(
-        DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
+        DailyRequest(
+            nurse_id="A",
+            request_date=date(2026, 8, 1),
+            raw_value=raw,
+            constraint_mode=RequestConstraintMode.LOCKED,
+        )
     )
     assert result.status == NormalizationStatus.NORMALIZED
     assert result.allowed_assignments == frozenset({ShiftCode.VACATION})
-    assert result.locked_shift is None
-    assert result.constraint_mode == RequestConstraintMode.PREFERENCE
+    assert result.locked_shift == ShiftCode.VACATION
+    assert result.constraint_mode == RequestConstraintMode.LOCKED
 
 
 @pytest.mark.parametrize("raw", ["ED", "ed", "\u0e0aED", " \u0e0aed "])
-def test_education_aliases_are_preferences_by_default(raw: str) -> None:
+def test_education_aliases_support_approved_locks(raw: str) -> None:
     result = normalize_request(
-        DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
+        DailyRequest(
+            nurse_id="A",
+            request_date=date(2026, 8, 1),
+            raw_value=raw,
+            constraint_mode=RequestConstraintMode.LOCKED,
+        )
     )
     assert result.allowed_assignments == frozenset({ShiftCode.EDUCATION})
-    assert result.locked_shift is None
+    assert result.locked_shift == ShiftCode.EDUCATION
 
 
 @pytest.mark.parametrize(
@@ -69,13 +79,19 @@ def test_explicit_admin_locks_remain_immutable(raw: str, shift: ShiftCode) -> No
         ("N/O", {ShiftCode.OFF, ShiftCode.NIGHT}),
     ],
 )
-def test_flexible_aliases_have_normalized_preference_sets(
+def test_flexible_aliases_have_required_assignment_sets(
     raw: str, allowed: set[ShiftCode]
 ) -> None:
     result = normalize_request(
-        DailyRequest(nurse_id="A", request_date=date(2026, 8, 1), raw_value=raw)
+        DailyRequest(
+            nurse_id="A",
+            request_date=date(2026, 8, 1),
+            raw_value=raw,
+            constraint_mode=RequestConstraintMode.REQUIRED,
+        )
     )
     assert result.kind == RequestKind.FLEXIBLE
+    assert result.constraint_mode == RequestConstraintMode.REQUIRED
     assert result.allowed_assignments == frozenset(allowed)
 
 

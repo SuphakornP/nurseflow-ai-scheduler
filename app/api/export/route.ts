@@ -5,6 +5,8 @@ import { getConfirmationEligibility } from "@/lib/confirmation-eligibility";
 import { callSolverBinary, SolverUnavailableError } from "@/lib/solver-client";
 import { getCachedSchedule } from "@/lib/schedule-cache";
 import { datasetToSolverProblem, versionToSolverAssignments } from "@/lib/solver-adapter";
+import { getSourceWorkbookTemplate } from "@/lib/source-workbook-cache";
+import { sourceWorkbookTemplateToSolverPayload } from "@/lib/source-workbook-template";
 import { isSupabaseConfigured } from "@/lib/supabase/admin";
 import { loadPersistedVersionForExport } from "@/lib/supabase/persisted-export";
 
@@ -44,6 +46,7 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
+    let sourceTemplate: ReturnType<typeof getSourceWorkbookTemplate> = null;
     if (version) {
       const eligibility = getConfirmationEligibility(version);
       if (!eligibility.eligible) {
@@ -56,15 +59,78 @@ export async function POST(request: Request) {
           { status: 409 },
         );
       }
+      const importedDataset = Boolean(
+        cached?.dataset.nurses?.some((nurse) => !nurse.synthetic),
+      );
+      if (importedDataset) {
+        const sourceHash = cached?.dataset.sourceWorkbookHash;
+        if (!sourceHash) {
+          return NextResponse.json(
+            {
+              error: "SOURCE_TEMPLATE_NOT_BOUND",
+              message: "Regenerate this imported schedule before exporting it.",
+            },
+            { status: 409 },
+          );
+        }
+        sourceTemplate = getSourceWorkbookTemplate(body.periodId, sourceHash);
+        if (!sourceTemplate) {
+          return NextResponse.json(
+            {
+              error: "SOURCE_TEMPLATE_NOT_AVAILABLE",
+              message: "Re-import the source workbook before exporting this schedule.",
+            },
+            { status: 409 },
+          );
+        }
+      }
+    } else if (persisted?.sourceWorkbookHash) {
+      sourceTemplate = getSourceWorkbookTemplate(
+        body.periodId,
+        persisted.sourceWorkbookHash,
+      );
+      if (!sourceTemplate) {
+        return NextResponse.json(
+          {
+            error: "SOURCE_TEMPLATE_NOT_AVAILABLE",
+            message: "Re-import the source workbook before exporting this schedule.",
+          },
+          { status: 409 },
+        );
+      }
+    }
+    const exportPayload = version && cached
+      ? {
+          problem: datasetToSolverProblem(cached.dataset, "balanced"),
+          assignments: versionToSolverAssignments(cached.dataset, version),
+          ...(sourceTemplate
+            ? {
+                source_workbook_template:
+                  sourceWorkbookTemplateToSolverPayload(sourceTemplate),
+              }
+            : {}),
+        }
+      : persisted
+        ? {
+            problem: persisted.problem,
+            assignments: persisted.assignments,
+            ...(sourceTemplate
+              ? {
+                  source_workbook_template:
+                    sourceWorkbookTemplateToSolverPayload(sourceTemplate),
+                }
+              : {}),
+          }
+        : null;
+    if (!exportPayload) {
+      return NextResponse.json(
+        { error: "VERSION_NOT_FOUND", message: "The schedule version was not found." },
+        { status: 404 },
+      );
     }
     const file = await callSolverBinary(
       "/export",
-      version && cached
-        ? {
-            problem: datasetToSolverProblem(cached.dataset, "balanced"),
-            assignments: versionToSolverAssignments(cached.dataset, version),
-          }
-        : persisted,
+      exportPayload,
     );
     return new NextResponse(file.bytes, {
       headers: {

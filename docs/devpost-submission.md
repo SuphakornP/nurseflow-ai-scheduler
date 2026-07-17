@@ -41,7 +41,7 @@ Nurse schedules are high-stakes operational documents assembled from staffing ru
 
 ## What it does
 
-NurseFlow imports pseudonymous nurse request sheets, normalizes ambiguous request values for human review, and creates multiple ICU roster candidates. It supports the supplied MICU form while discarding employee codes and notes before the normalized dataset reaches the browser workflow, solver, OpenAI, or exports. Imported values remain preferences: coverage, skill mix, and sequence safety can override them, while every unmet request stays visible. An independent validator checks the hard rules, and schedulers compare request satisfaction and workload trade-offs before confirming one valid version and exporting a review-ready workbook. When Supabase has a matching staged period roster, confirmation also saves an immutable schedule-version history.
+NurseFlow imports pseudonymous nurse request sheets, normalizes ambiguous request values for human review, and creates multiple ICU roster candidates. It supports the supplied MICU form while discarding employee codes and notes before the normalized dataset reaches the browser workflow, solver, OpenAI, or exports. Approved Vacation and non-L0 Education are fixed, O/D and O/N remain inside their required choice sets, and only soft requests may yield to staffing or sequence safety. An independent validator checks the hard rules, and schedulers compare mandatory evidence, soft-request satisfaction, and workload trade-offs before confirming one valid version and exporting a review-ready workbook. When Supabase has a matching staged period roster, confirmation also saves an immutable schedule-version history.
 
 The application is admin-only. Public examples use synthetic nicknames and no patient data. The configured administrator email is never written to scheduling records.
 
@@ -69,7 +69,7 @@ The hardest part was keeping feasibility, privacy, and explainability aligned. W
 
 ## What we learned
 
-AI is most useful here at the ambiguous edges: interpreting messy request notation and translating structured evidence into clear explanations. Nurse requests are preferences rather than safety guarantees; constraint solving and validation remain the right tools for schedule correctness, while the final decision remains human.
+AI is most useful here at the ambiguous edges: interpreting messy request notation and translating structured evidence into clear explanations. It never decides whether an input is mandatory. Deterministic policy keeps approved leave and required choices hard, while constraint solving and validation remain responsible for schedule correctness and the final decision remains human.
 
 ## What's next
 

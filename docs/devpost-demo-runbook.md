@@ -10,6 +10,15 @@ Use this runbook to produce the required public YouTube demo and supporting imag
 - Hide notifications, password managers, developer tools, and browser autofill. Use a throwaway admin account and verify every frame before publishing.
 - Keep the OpenAI Build Week submission unsubmitted. Recording and uploading media do not authorize submission.
 
+## Manual infeasibility check
+
+Use a synthetic fixture if this behavior is shown publicly. When fixed VAC/ED
+events leave fewer qualified staff than the Day + Night skill minimum, Compare
+must show `INFEASIBLE`, the affected date/skill capacity, and disabled
+Confirm/Export controls. Preserve VAC; add a qualified relief nurse or formally
+correct the ED approval in the source fixture, then re-import. Never present an
+invalid workbook as an acceptable roster.
+
 ## Three-minute shot and voiceover plan
 
 | Time | Screen | Voiceover focus |
@@ -33,11 +42,11 @@ privacy-review it before recording; never open the real request form on screen.
 
 Nurse scheduling combines coverage, skill mix, leave, prior shifts, and individual requests. NurseFlow AI helps an experienced scheduler reconcile those inputs without handing the final decision to a model.
 
-The app can import a pseudonymous request sheet. The supplied MICU layout is supported, but employee codes and notes are dropped during import. Known request notation is parsed deterministically. When a token is ambiguous, GPT-5.6 uses Structured Outputs to suggest a bounded interpretation, and the administrator must review it. Accepted Sheet values remain nurse preferences, not guaranteed assignments.
+The app can import a pseudonymous request sheet. The supplied MICU layout is supported, but employee codes and notes are dropped during import. Known request notation is parsed deterministically. When a token is ambiguous, GPT-5.6 uses Structured Outputs to suggest a bounded interpretation, and the administrator must review it. Approved Vacation and non-L0 Education are fixed, O/D and O/N are required choices, and the remaining nurse requests are soft.
 
-After review, a private FastAPI service runs Google OR-Tools CP-SAT to create three candidates: request-first, balanced, and reduced Member L0 utilization. GPT-5.6 does not generate the roster. Staffing, skill mix, sequence safety, and any explicit administrator locks remain hard constraints. A separate deterministic validator recomputes those rules and assignment completeness for every candidate.
+After review, a private FastAPI service runs Google OR-Tools CP-SAT to create three candidates: request-first, balanced, and reduced Member L0 utilization. GPT-5.6 does not generate the roster. Fixed events, required choices, staffing, skill mix, and sequence safety remain hard constraints. A separate deterministic validator recomputes those rules and assignment completeness for every candidate.
 
-The workspace makes trade-offs visible. The scheduler can compare request satisfaction and workload, inspect assignment-level evidence, and see why a request could not be fulfilled. Confirm and export are fail-closed: only a `VALID` result with non-empty, all-passing hard-validation evidence can proceed. The chosen version is exported as a formula-safe workbook and, when Supabase has a matching staged roster, recorded as immutable schedule history.
+The workspace makes trade-offs visible. Fixed-event and required-choice evidence is shown separately from soft-request satisfaction, so the scheduler can inspect workload trade-offs without hiding mandatory inputs inside an aggregate. Confirm and export are fail-closed: only a `VALID` result with non-empty, all-passing hard-validation evidence can proceed. The chosen version is exported as a formula-safe workbook and, when Supabase has a matching staged roster, recorded as immutable schedule history.
 
 Codex accelerated the cross-stack implementation, architecture review, authentication, security hardening, tests, browser QA, and documentation. GPT-5.6 is deliberately limited to ambiguous-language interpretation and evidence-grounded explanations. Constraint solving decides feasibility, independent validation checks correctness, and a human remains accountable.
 

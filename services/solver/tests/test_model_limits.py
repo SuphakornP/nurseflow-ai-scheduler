@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -15,6 +17,7 @@ from app.models import (
     ScheduleProblem,
     ScheduleRules,
     ShiftCode,
+    SourceWorkbookTemplate,
     StaffingRange,
 )
 
@@ -100,6 +103,36 @@ def test_export_request_rejects_too_many_assignments() -> None:
         )
 
     _assert_limit_error(exc_info.value, "assignments")
+
+
+@pytest.mark.parametrize("content", ["not-base64!", base64.b64encode(b"not xlsx").decode()])
+def test_source_workbook_rejects_invalid_content(content: str) -> None:
+    with pytest.raises(ValidationError):
+        SourceWorkbookTemplate(
+            content_base64=content,
+            worksheet_name="Requests",
+            nurse_rows={"nurse-0": 3},
+            date_columns={"2026-08-01": 7},
+        )
+
+
+def test_source_workbook_rejects_duplicate_cell_mappings() -> None:
+    content = base64.b64encode(b"PK synthetic xlsx header").decode()
+
+    with pytest.raises(ValidationError):
+        SourceWorkbookTemplate(
+            content_base64=content,
+            worksheet_name="Requests",
+            nurse_rows={"nurse-0": 3, "nurse-1": 3},
+            date_columns={"2026-08-01": 7},
+        )
+    with pytest.raises(ValidationError):
+        SourceWorkbookTemplate(
+            content_base64=content,
+            worksheet_name="Requests",
+            nurse_rows={"nurse-0": 3},
+            date_columns={"2026-08-01": 7, "2026-08-02": 7},
+        )
 
 
 def test_request_resolution_rejects_more_than_known_shift_codes() -> None:

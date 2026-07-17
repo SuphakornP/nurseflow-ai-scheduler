@@ -26,6 +26,7 @@ const dataset: ScheduleDataset = {
   nurses: [
     { id: "nurse-1", nickname: "Lotus", skillLevel: "INCHARGE" },
     { id: "nurse-2", nickname: "Mint", skillLevel: "MEMBER_L1" },
+    { id: "nurse-3", nickname: "Iris", skillLevel: "MEMBER_L1" },
   ],
   requests: [
     {
@@ -44,6 +45,17 @@ const dataset: ScheduleDataset = {
       rawValue: "VAC",
       normalizedType: "VACATION",
       allowedAssignments: ["VAC"],
+      constraintMode: "LOCKED",
+      confidence: 1,
+      requiresReview: false,
+    },
+    {
+      nurseId: "nurse-3",
+      date: "2026-08-01",
+      rawValue: "O/D",
+      normalizedType: "OFF_OR_DAY",
+      allowedAssignments: ["OFF", "D"],
+      constraintMode: "REQUIRED",
       confidence: 1,
       requiresReview: false,
     },
@@ -81,6 +93,13 @@ function result(
         assignment_date: "2026-08-01",
         shift: "VAC",
       },
+      {
+        nurse_id: "nurse-3",
+        nickname: "Iris",
+        skill_level: "MEMBER_L1",
+        assignment_date: "2026-08-01",
+        shift: "D",
+      },
     ],
     metrics: {},
     phases: [],
@@ -102,7 +121,7 @@ function result(
 }
 
 describe("solver adapter request semantics", () => {
-  it("sends imported requests as preferences and defaults legacy requests to locked", () => {
+  it("sends explicit preference, required-choice, and approved-lock modes", () => {
     const problem = datasetToSolverProblem(dataset, "balanced");
 
     expect(problem.requests[0]).toMatchObject({
@@ -114,33 +133,43 @@ describe("solver adapter request semantics", () => {
       raw_value: "VAC",
       constraint_mode: "LOCKED",
     });
+    expect(problem.requests[2]).toMatchObject({
+      raw_value: "O/D",
+      constraint_mode: "REQUIRED",
+    });
   });
 
-  it("round-trips preference and approved-lock modes from solver demo problems", () => {
+  it("round-trips every request mode from solver problems", () => {
     const problem = datasetToSolverProblem(dataset, "balanced");
     problem.requests[1].constraint_mode = "LOCKED";
 
     expect(
       solverProblemToDataset(problem).requests.map((request) => request.constraintMode),
-    ).toEqual(["PREFERENCE", "LOCKED"]);
+    ).toEqual(["PREFERENCE", "LOCKED", "REQUIRED"]);
   });
 
-  it("does not label a preferred vacation as a locked assignment", () => {
-    const preferredDataset: ScheduleDataset = {
-      ...dataset,
-      requests: dataset.requests.map((request) => ({
-        ...request,
-        constraintMode: "PREFERENCE",
-      })),
-    };
+  it("marks approved Vacation as fixed and excludes mandatory inputs from soft metrics", () => {
+    const version = solverResultToVersion(dataset, result(), "balanced", 1);
 
-    const version = solverResultToVersion(preferredDataset, result(), "balanced", 1);
-
-    expect(version.assignments[1].source).toBe("SOLVER");
+    expect(version.assignments[1].source).toBe("LOCKED_REQUEST");
+    expect(version.assignments[2].source).toBe("SOLVER");
     expect(version.requestOutcomes[0]).toMatchObject({
       requested: "D",
+      constraintMode: "PREFERENCE",
       assigned: "N",
       satisfied: false,
+    });
+    expect(version.requestOutcomes[1]).toMatchObject({
+      requested: "VAC",
+      constraintMode: "LOCKED",
+      satisfied: true,
+    });
+    expect(version.metrics).toMatchObject({
+      requestSatisfactionRate: 0,
+      lockedRequirementsPassed: 1,
+      lockedRequirementsTotal: 1,
+      requiredChoicesPassed: 1,
+      requiredChoicesTotal: 1,
     });
   });
 });
@@ -166,6 +195,44 @@ describe("solver adapter evidence handling", () => {
       weekendBalanceScore: 0,
       hardConstraintsPassed: 0,
       hardConstraintsTotal: 0,
+    });
+  });
+
+  it("preserves aggregate capacity evidence for an infeasible result", () => {
+    const version = solverResultToVersion(
+      dataset,
+      result({
+        status: "INFEASIBLE",
+        assignments: [],
+        validation: {
+          is_valid: false,
+          checks: [
+            {
+              code: "MANDATORY_SKILL_CAPACITY",
+              name: "Fixed events exceed skill capacity",
+              status: "FAIL",
+              violation_count: 1,
+              details: [
+                "2026-08-26: TRAINEE_INC has 1 available but Day + Night require at least 2.",
+              ],
+            },
+          ],
+        },
+      }),
+      "balanced",
+      1,
+    );
+
+    expect(version.validations).toEqual([
+      expect.objectContaining({
+        code: "MANDATORY_SKILL_CAPACITY",
+        status: "FAIL",
+        violationCount: 1,
+      }),
+    ]);
+    expect(version.metrics).toMatchObject({
+      hardConstraintsPassed: 0,
+      hardConstraintsTotal: 1,
     });
   });
 

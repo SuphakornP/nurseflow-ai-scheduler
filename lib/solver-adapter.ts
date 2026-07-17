@@ -96,9 +96,7 @@ export function datasetToSolverProblem(
       nurse_id: request.nurseId,
       request_date: request.date,
       raw_value: request.rawValue,
-      // Legacy in-memory demo fixtures predate constraintMode. Defaulting them
-      // to LOCKED preserves the previously approved-event behavior.
-      constraint_mode: request.constraintMode ?? "LOCKED",
+      constraint_mode: request.constraintMode,
       ...(request.requiresReview
         ? {
             resolution: {
@@ -128,7 +126,7 @@ export function solverProblemToDataset(problem: SolverDemoProblem): ScheduleData
     synthetic: true,
   }));
   const requests: ShiftRequest[] = problem.requests.map((request) => {
-    const constraintMode = request.constraint_mode ?? "LOCKED";
+    const constraintMode = request.constraint_mode;
     const normalized = normalizeRequestValue(
       request.raw_value,
       request.nurse_id,
@@ -227,13 +225,29 @@ function requestOutcomes(
         nurseId: request.nurseId,
         date: request.date,
         requested: request.rawValue,
+        normalizedType: request.normalizedType,
+        constraintMode: request.constraintMode,
         assigned,
         priority: request.priority,
         satisfied,
-        reasonCode: satisfied ? undefined : "STAFFING_OR_SEQUENCE_COVERAGE",
+        reasonCode: satisfied
+          ? undefined
+          : request.constraintMode === "LOCKED"
+            ? "MANDATORY_EVENT_VIOLATION"
+            : request.constraintMode === "REQUIRED"
+              ? "REQUIRED_CHOICE_VIOLATION"
+              : "STAFFING_OR_SEQUENCE_COVERAGE",
         explanation: satisfied
-          ? `${request.rawValue || "Availability"} was respected by the optimizer.`
-          : `${request.rawValue} was not selected because assigning ${assigned} was required to preserve staffing, skill mix, or sequence constraints after higher-priority requests were considered.`,
+          ? request.constraintMode === "LOCKED"
+            ? `${request.rawValue} is an approved fixed event and was preserved.`
+            : request.constraintMode === "REQUIRED"
+              ? `${assigned} satisfies the required ${request.rawValue} choice.`
+              : `${request.rawValue || "Availability"} was respected by the optimizer.`
+          : request.constraintMode === "LOCKED"
+            ? `${request.rawValue} is mandatory. This assignment must fail hard validation and cannot be confirmed.`
+            : request.constraintMode === "REQUIRED"
+              ? `${assigned} is outside the required ${request.rawValue} choice. This assignment cannot be confirmed.`
+              : `${request.rawValue} was not selected because assigning ${assigned} was required to preserve staffing, skill mix, or sequence constraints after higher-priority requests were considered.`,
       }];
     });
 }
@@ -287,7 +301,12 @@ function computeMetrics(
         return item.nurseId === nurse.id && (day === 0 || day === 6);
       }).length,
   );
-  const offOutcomes = outcomes.filter((item) => /^O[1-4]/i.test(item.requested));
+  const preferenceOutcomes = outcomes.filter((item) => item.constraintMode === "PREFERENCE");
+  const lockedOutcomes = outcomes.filter((item) => item.constraintMode === "LOCKED");
+  const requiredOutcomes = outcomes.filter((item) => item.constraintMode === "REQUIRED");
+  const offOutcomes = preferenceOutcomes.filter(
+    (item) => item.normalizedType === "OFF_REQUEST",
+  );
   const o1 = offOutcomes.filter((item) => item.priority === 1);
   const hard = validations.filter((item) => item.type === "HARD");
   const l0Ids = new Set(
@@ -296,8 +315,9 @@ function computeMetrics(
   return {
     requestSatisfactionRate: !completeEvidence
       ? 0
-      : outcomes.length
-        ? (outcomes.filter((item) => item.satisfied).length / outcomes.length) * 100
+      : preferenceOutcomes.length
+        ? (preferenceOutcomes.filter((item) => item.satisfied).length /
+            preferenceOutcomes.length) * 100
         : 100,
     offSatisfactionRate: !completeEvidence
       ? 0
@@ -321,6 +341,14 @@ function computeMetrics(
     memberL0Usage: clinical.filter((item) => l0Ids.has(item.nurseId)).length,
     hardConstraintsPassed: hard.filter((item) => item.status === "PASS").length,
     hardConstraintsTotal: hard.length,
+    lockedRequirementsPassed: completeEvidence
+      ? lockedOutcomes.filter((item) => item.satisfied).length
+      : 0,
+    lockedRequirementsTotal: lockedOutcomes.length,
+    requiredChoicesPassed: completeEvidence
+      ? requiredOutcomes.filter((item) => item.satisfied).length
+      : 0,
+    requiredChoicesTotal: requiredOutcomes.length,
   };
 }
 
@@ -338,7 +366,7 @@ export function solverResultToVersion(
       (request) =>
         request.nurseId === assignment.nurse_id &&
         request.date === assignment.assignment_date &&
-        (request.constraintMode ?? "LOCKED") === "LOCKED" &&
+        request.constraintMode === "LOCKED" &&
         ["VACATION", "EDUCATION"].includes(request.normalizedType),
     )
       ? "LOCKED_REQUEST"

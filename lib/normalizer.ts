@@ -29,7 +29,7 @@ export function normalizeRequestValue(
   rawValue: unknown,
   nurseId: string,
   date: string,
-  constraintMode: RequestConstraintMode = "LOCKED",
+  constraintMode: RequestConstraintMode,
 ): ShiftRequest {
   const cleaned = clean(rawValue);
   const base = {

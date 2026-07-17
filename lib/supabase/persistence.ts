@@ -44,6 +44,10 @@ function metricRows(version: ScheduleVersion) {
     { metric_code: "MEMBER_L0_USAGE", metric_value: version.metrics.memberL0Usage },
     { metric_code: "HARD_CONSTRAINTS_PASSED", metric_value: version.metrics.hardConstraintsPassed },
     { metric_code: "HARD_CONSTRAINTS_TOTAL", metric_value: version.metrics.hardConstraintsTotal },
+    { metric_code: "LOCKED_REQUIREMENTS_PASSED", metric_value: version.metrics.lockedRequirementsPassed },
+    { metric_code: "LOCKED_REQUIREMENTS_TOTAL", metric_value: version.metrics.lockedRequirementsTotal },
+    { metric_code: "REQUIRED_CHOICES_PASSED", metric_value: version.metrics.requiredChoicesPassed },
+    { metric_code: "REQUIRED_CHOICES_TOTAL", metric_value: version.metrics.requiredChoicesTotal },
   ].map((metric) => ({ ...metric, metric_detail: {} }));
 }
 
@@ -124,6 +128,7 @@ export async function persistAndConfirmSchedule(
       generation_summary: {
         source_version_id: version.id,
         privacy_mode: schedule.dataset.privacyMode,
+        source_workbook_hash: schedule.dataset.sourceWorkbookHash ?? null,
         rejected_request_count: version.requestOutcomes.filter((outcome) => !outcome.satisfied).length,
         requested_by_nickname: actorNickname,
         solver_problem: datasetToSolverProblem(schedule.dataset, "balanced"),

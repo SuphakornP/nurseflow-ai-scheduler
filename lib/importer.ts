@@ -3,6 +3,12 @@ import "server-only";
 import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import { normalizeRequestValue } from "@/lib/normalizer";
+import { constraintModeForRequestValue } from "@/lib/request-semantics";
+import {
+  assertSafeWorkbookDimensions,
+  assertSafeXlsxArchive,
+  XlsxSecurityError,
+} from "@/lib/xlsx-security";
 import type {
   Assignment,
   Nurse,
@@ -64,6 +70,14 @@ const SKILL_ALIASES: Record<string, SkillLevel> = {
   "MEMBER LEVEL 0": "MEMBER_L0",
   MEMBER_L0: "MEMBER_L0",
   L0: "MEMBER_L0",
+};
+
+const MICU_LEGACY_COMPOSITION: Record<SkillLevel, number> = {
+  INCHARGE: 8,
+  TRAINEE_INC: 4,
+  MEMBER_L1: 11,
+  MEMBER_L2: 4,
+  MEMBER_L0: 1,
 };
 
 export class ImportValidationError extends Error {
@@ -172,10 +186,26 @@ export async function parseWorkbook(
   period: SchedulePeriod,
   sourceLabel: string,
 ): Promise<ScheduleDataset> {
+  try {
+    assertSafeXlsxArchive(bytes);
+  } catch (error) {
+    if (error instanceof XlsxSecurityError) {
+      throw new ImportValidationError(error.message);
+    }
+    throw error;
+  }
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(
     bytes as unknown as Parameters<typeof workbook.xlsx.load>[0],
   );
+  try {
+    assertSafeWorkbookDimensions(workbook);
+  } catch (error) {
+    if (error instanceof XlsxSecurityError) {
+      throw new ImportValidationError(error.message);
+    }
+    throw error;
+  }
   const worksheet = workbook.worksheets[0];
   if (!worksheet) throw new ImportValidationError("The workbook does not contain a worksheet.");
   const rows: unknown[][] = [];
@@ -266,13 +296,19 @@ export async function parseWorkbook(
     }
     seenNicknames.add(nicknameKey);
     const nurseId = stableId(`${period.id}:${nicknameKey}`);
-    nurses.push({ id: nurseId, nickname, skillLevel: parseSkill(row[skillColumn]) });
+    const skillLevel = parseSkill(row[skillColumn]);
+    nurses.push({ id: nurseId, nickname, skillLevel });
 
     dateColumns.forEach(({ index, date }) => {
       if (!expectedDateSet.has(date)) return;
       if (date >= period.startDate && date <= period.endDate) {
         requests.push(
-          normalizeRequestValue(row[index], nurseId, date, "PREFERENCE"),
+          normalizeRequestValue(
+            row[index],
+            nurseId,
+            date,
+            constraintModeForRequestValue(row[index], skillLevel),
+          ),
         );
       } else {
         const shift = previousShift(row[index]);
@@ -292,6 +328,27 @@ export async function parseWorkbook(
   });
 
   if (!nurses.length) throw new ImportValidationError("No nurse rows were found.");
+  if (usesLegacyRequestSheet) {
+    const counts = Object.fromEntries(
+      Object.keys(MICU_LEGACY_COMPOSITION).map((skillLevel) => [
+        skillLevel,
+        nurses.filter((nurse) => nurse.skillLevel === skillLevel).length,
+      ]),
+    ) as Record<SkillLevel, number>;
+    const mismatches = (Object.entries(MICU_LEGACY_COMPOSITION) as Array<
+      [SkillLevel, number]
+    >).filter(([skillLevel, expected]) => counts[skillLevel] !== expected);
+    if (mismatches.length) {
+      throw new ImportValidationError(
+        `The MICU request form requires exactly 28 nurses: ${mismatches
+          .map(
+            ([skillLevel, expected]) =>
+              `${skillLevel} ${expected} (found ${counts[skillLevel]})`,
+          )
+          .join(", ")}.`,
+      );
+    }
+  }
   return {
     period,
     nurses,

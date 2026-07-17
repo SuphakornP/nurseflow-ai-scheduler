@@ -125,8 +125,8 @@ def build_demo_problem(
         for nurse_id, day, priority in conflict_requests
     )
 
-    # A small number of immutable events demonstrate VAC/ED behavior while
-    # retaining ample capacity in every skill group.
+    # A small number of immutable VAC/ED events and required flexible choices
+    # demonstrate the production request contract while retaining ample capacity.
     locked_events = [
         ("IC01", 6, "Vac"),
         ("TR01", 11, "VAC"),
@@ -151,7 +151,11 @@ def build_demo_problem(
                 nurse_id=nurse_id,
                 request_date=key[1],
                 raw_value=raw_value,
-                constraint_mode=RequestConstraintMode.LOCKED,
+                constraint_mode=(
+                    RequestConstraintMode.REQUIRED
+                    if "/" in raw_value
+                    else RequestConstraintMode.LOCKED
+                ),
             )
         )
 

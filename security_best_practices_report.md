@@ -6,7 +6,7 @@ Date: 2026-07-17
 
 The current repository has no identified Critical or High severity finding. The original unauthenticated-route, public-solver, spreadsheet-injection, and vulnerable-pytest findings have been remediated. The checked-in implementation is suitable for the stated private, single-admin hackathon scope when the Next.js app is the only public service and FastAPI is kept on private ingress.
 
-It is not yet suitable for a hospital pilot or a general internet-facing multi-user service. The remaining risks are centralized abuse protection, managed credential/session lifecycle, bounded decompression for spreadsheet imports, a complete production CSP, and container/network hardening.
+It is not yet suitable for a hospital pilot or a general internet-facing multi-user service. The remaining risks are centralized abuse protection, managed credential/session lifecycle, a complete production CSP, and container/network hardening.
 
 This review covers the Next.js/React application, FastAPI solver, Supabase migration and local configuration, environment-file handling, dependency manifests, import/export paths, and deployment files. Real values in `.env.local` and `services/solver/.env.local` were parsed only for presence, format, minimum length, token equality, and token separation checks; they were never printed. Randomness and rotation history remain outside this review.
 
@@ -27,14 +27,6 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
 - Evidence: one plaintext deployment-secret password is compared server-side, and successful authentication creates a stateless JWT with an absolute eight-hour lifetime. Logout deletes the browser cookie but does not deny-list a copied token. There is no MFA, password reset, per-session revocation, or managed identity lifecycle. Rotating `AUTH_SECRET` remains the emergency mechanism that invalidates all sessions.
 - Impact: a stolen password or session has a larger blast radius than it would with managed authentication and server-side revocation.
 - Recommendation: before a hospital pilot, move to a managed identity provider with slow password hashing where applicable, MFA, centralized revocation, access review, and auditable credential rotation. Shorten the session lifetime if the private hackathon deployment does not need eight hours.
-
-### SEC-R03: Spreadsheet upload limits do not bound multipart parsing or ZIP expansion
-
-- Severity: Low in the admin-only build; Medium if import is exposed to untrusted users.
-- Locations: `app/api/import/route.ts:12`, `app/api/import/route.ts:67`, `app/api/import/route.ts:84`, `lib/importer.ts:133`.
-- Evidence: the route authenticates before parsing, rejects an oversized declared request, caps uploaded and remote files at 10 MB, streams Google exports with a hard byte limit, and applies a 15-second timeout. However, `request.formData()` runs before `File.size` can be checked when `Content-Length` is absent or misleading. A 10 MB `.xlsx` is a ZIP archive, and `ExcelJS.Workbook.xlsx.load()` has no repository-enforced cap on decompressed bytes or archive-entry count.
-- Impact: an authenticated malicious or accidentally pathological workbook could cause memory or CPU pressure.
-- Recommendation: enforce an independent body limit at the reverse proxy/hosting edge, use a streaming multipart parser if untrusted uploads are introduced, and inspect ZIP metadata with limits on entry count, compression ratio, and total uncompressed bytes before workbook parsing.
 
 ### SEC-R04: Content Security Policy is useful but incomplete
 
@@ -69,7 +61,12 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
 - `/demo`, `/generate`, and `/export` are protected. `/health` is intentionally public and minimal; FastAPI docs, ReDoc, and OpenAPI are disabled (`services/solver/app/main.py:22`). CORS is not enabled because browsers should not call the solver directly.
 - Generation JSON is streamed with a 5 MB cap and validated through a strict Zod dataset schema (`app/api/generate/route.ts:16`, `lib/schedule-schema.ts:71`).
 - Pydantic forbids unknown fields and bounds the scheduling problem to 100 nurses, 62 days, 6,200 requests/previous assignments, staffing values, rule windows, string lengths, solver time, and export assignments (`services/solver/app/models.py:10`, `services/solver/app/models.py:144`).
-- Google Sheet import allowlists the expected HTTPS Docs URL shape, applies a 15-second timeout, and streams the response through a 10 MB cap (`app/api/import/route.ts:41`, `lib/importer.ts:247`).
+- Google Sheet import allowlists the expected HTTPS Docs URL shape, applies a 15-second timeout, and streams the response through a 10 MB cap. XLSX preflight also limits expanded size, compression ratio, entry count, worksheet dimensions, and active/embedded parts before parsing (`app/api/import/route.ts`, `lib/xlsx-security.ts`).
+- Google Sheets' relationship-free empty drawing placeholder is accepted only
+  after its bounded XML is verified as empty. Drawing relationships, media, OLE,
+  ActiveX, macros, external links, and unknown drawing payloads remain blocked;
+  the sanitizer then removes the empty drawing and person metadata before cache
+  or solver transfer (`lib/xlsx-security.ts`, `lib/source-workbook-template.ts`).
 
 ### Output, error, and browser protections
 
@@ -77,7 +74,7 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
   candidate must be `VALID`, include non-empty hard-validation evidence, and
   pass every hard validation (`lib/confirmation-eligibility.ts:123`,
   `app/api/export/route.ts:48`).
-- CSV and Excel exports neutralize formula-leading cells. The FastAPI exporter also catches formula markers after whitespace/control characters, and export filenames use an ASCII allowlist before entering response headers (`lib/spreadsheet.ts:1`, `services/solver/app/export.py:29`, `services/solver/app/main.py:37`).
+- CSV and generated audit sheets neutralize formula-leading cells. Imported templates additionally remove formulas, hyperlinks, comments, defined names, unrelated sheets, embedded content, and identifying document properties; export is bound to the sanitized source hash. FastAPI independently rechecks ZIP expansion and worksheet limits before opening a template (`lib/source-workbook-template.ts`, `services/solver/app/export.py`).
 - Authenticated API routes return stable client-safe errors rather than forwarding solver, Supabase, OpenAI, or deployment details. Health output exposes readiness rather than credentials or service URLs.
 - Global responses set a partial CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a restrictive Permissions Policy, and omit `X-Powered-By` (`next.config.ts:3`).
 - No dangerous React HTML rendering or dynamic-code sink was found during static review.
@@ -97,12 +94,12 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
 - `git check-ignore -v .env.local services/solver/.env.local`: both files matched `.gitignore`.
 - `npm audit --audit-level=low`: 0 known vulnerabilities across 598 dependencies.
 - `pip-audit` against the solver virtual environment: no known vulnerabilities; installed pytest is 9.1.1.
-- `npm run test:web`: 128 tests passed.
-- `npm run test:solver`: 73 tests passed. The only output was an existing Starlette/httpx deprecation warning.
+- `npm run test:web`: 167 tests passed.
+- `npm run test:solver`: 93 tests passed. The only output was the existing Starlette/httpx deprecation warning.
 - Static review of authentication, every Next.js Route Handler, React injection sinks, request-size controls, FastAPI authentication/models/export, OpenAI data flow, Supabase RLS/policies/grants/functions, and deployment files.
 
 ## Release decision
 
 Security review status: **PASS WITH ACCEPTED RESIDUAL RISKS** for a private, admin-only hackathon deployment.
 
-Before publishing, verify that the solver is not directly internet-reachable, production uses HTTPS so the session cookie is `Secure`, `AUTH_SECRET` and `SOLVER_API_TOKEN` are independent random values of at least 32 characters, and only placeholder environment files are staged. Before any hospital pilot or external-user access, resolve SEC-R01 through SEC-R05 and complete privacy, retention, access-review, incident-response, and legal assessments.
+Before publishing, verify that the solver is not directly internet-reachable, production uses HTTPS so the session cookie is `Secure`, `AUTH_SECRET` and `SOLVER_API_TOKEN` are independent random values of at least 32 characters, and only placeholder environment files are staged. Before any hospital pilot or external-user access, resolve SEC-R01, SEC-R02, SEC-R04, and SEC-R05 and complete privacy, retention, access-review, incident-response, and legal assessments.

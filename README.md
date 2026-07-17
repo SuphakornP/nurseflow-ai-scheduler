@@ -233,6 +233,30 @@ column are accepted but deliberately omitted from the normalized dataset,
 solver payload, and export. The leading `29`, `30`, and `31` columns map to
 July context dates; the following `1` through `31` columns map to August.
 `Member L.1`, `Member L.2`, and `Member L.0` are accepted skill labels.
+The supplied MICU layout is accepted only with the expected 28-person composition:
+8 Incharge, 4 Trainee, 11 Member L1, 4 Member L2, and 1 Member L0. Generic
+nickname-only templates are not subject to that MICU-specific composition check.
+
+Each monthly import is a separate source snapshot. The current workspace is
+configured for August 2026; a later month should use its own period configuration
+and Google Sheet URL. Nicknames may change between monthly files because the
+row-to-cell mapping is rebuilt from that import. The showcase still derives
+identity from period plus nickname, so this is not a production identity scheme.
+
+For an imported roster, export is bound to the exact sanitized source snapshot.
+NurseFlow retains the first-sheet layout and styles, overwrites only the current
+period cells with `D`, `N`, `OFF`, `Vac`, or `ชED`, and adds `Summary`,
+`Validation`, `Unfulfilled Requests`, and `Metadata`. Employee-code/note values,
+comments, formulas, hyperlinks, unrelated sheets, embedded content, defined
+names, and identifying workbook properties are removed. The in-memory template
+expires with the eight-hour admin session or on process restart; re-import is then
+required instead of silently exporting into another template.
+
+Google exports may contain a relationship-free empty drawing placeholder and
+style-only rows. The importer accepts only that empty placeholder, rejects
+drawing relationships/media/embedded objects, caps raw worksheets at 2,048 rows,
+then strips Google person/drawing metadata and trims trailing style-only rows
+before caching the template.
 
 Supported request notation:
 
@@ -240,17 +264,21 @@ Supported request notation:
 | --- | --- |
 | empty | No explicit preference; available for Day, Night, or OFF |
 | `O1` ... `O4` | Ranked OFF preference |
-| `O/D`, `D/O` | OFF-or-Day preference |
-| `O/N`, `N/O` | OFF-or-Night preference |
-| `VAC` | Vacation preference |
-| `ED` | Education preference |
+| `O/D`, `D/O` | Required choice: assignment must be OFF or Day |
+| `O/N`, `N/O` | Required choice: assignment must be OFF or Night |
+| `VAC` | Approved Vacation; immutable |
+| `ED` | Fixed Education for non-L0 staff; weekday Education preference for Member L0 |
 | `D`, `N`, or an unknown token | Shift preference that is ambiguous until a human accepts the mapping |
 
-Every accepted scheduling value imported from a Sheet or workbook remains a
-preference, including `VAC` and `ED`; it can be left unmet when a hard safety
-rule requires another assignment. Imported cells never create hard locks.
-Explicit locked events are reserved for trusted internal or synthetic inputs
-that mark them as `LOCKED`.
+For Member L0, an otherwise blank weekday resolves to `D`, `N`, or `ชED` rather
+than ordinary OFF; explicit O1-O4, required OFF choices, or locked VAC can still
+produce a non-clinical day.
+
+Request semantics are explicit and fail closed. `VAC` and non-L0 `ED` use
+`LOCKED`, so a candidate that changes them cannot pass validation. `O/D` and
+`O/N` use `REQUIRED`, which permits the stated alternatives but nothing else.
+Member L0 `ED`, ranked OFF, Day, Night, and blank availability use `PREFERENCE`;
+only those soft entries may yield to mandatory staffing and safety rules.
 
 Imports with explicit first-name, last-name, or full-name headers are rejected,
 except for the exact MICU compatibility layout above; its display values must
@@ -266,29 +294,38 @@ FastAPI accepts at most 100 nurses, a 62-day period, and 6,200 requests or
 previous assignments. Pydantic rejects unknown fields and bounds identifiers,
 strings, staffing ranges, rule windows, time limits, and export assignments.
 
-The three candidate profiles use the same hard staffing, skill-mix, sequence,
-completeness, and configured Member L0 constraints. Nurse requests are scored
-preferences, and each profile prioritizes those preferences and other soft goals
-differently:
+The three candidate profiles use the same fixed VAC/ED events, required choice
+sets, hard staffing, skill-mix, sequence, completeness, and configured Member L0
+constraints. They also freeze the shared business priorities in the same order:
+O1, O2, O3, O4, remaining preferences, contiguous OFF/VAC, Day/Night fairness,
+minimum L0 use, and weekend fairness. A profile is only a final deterministic
+tie-break after those values are fixed:
 
-| Profile | Primary intent |
+| Profile | Final tie-break intent |
 | --- | --- |
-| `requests_first` | Maximize imported request satisfaction before other soft goals |
-| `balanced` | Balance request satisfaction, workloads, weekends, and skill usage |
-| `minimize_l0` | Reduce Member L0 clinical assignments while preserving feasibility |
+| `requests_first` | Prefer request-preserving layouts among otherwise equivalent solutions |
+| `balanced` | Prefer balanced workloads among otherwise equivalent solutions |
+| `minimize_l0` | Prefer less L0 clinical use among otherwise equivalent solutions |
 
 Hard validation covers assignment completeness, daily Day/Night coverage,
-skill mix, explicitly locked internal events, sequence limits, previous-month
-boundaries, and configured Member L0 limits. Candidate metrics cover overall
-and ranked request satisfaction, Day/Night distribution, weekend balance,
-Member L0 usage, and hard-rule pass counts. The administrator compares the
-three profiles and reviews unmet requests before choosing a version.
+skill mix, fixed events, required choice sets, sequence limits, previous-month
+boundaries, and configured Member L0 limits. Candidate metrics report fixed and
+required evidence separately from soft-request satisfaction, plus Day/Night
+distribution, weekend balance, Member L0 usage, and hard-rule pass counts. The
+administrator compares the three profiles and reviews unmet soft requests before
+choosing a version.
 
 Confirmation and export both fail closed. A version is eligible only when its
 status is `VALID`, it contains at least one hard-validation result, and every
 hard-validation result passes. `INFEASIBLE` or `INVALID` versions, empty
 validation evidence, and malformed validation data cannot be confirmed or
 exported.
+
+When immutable events make staffing impossible, Compare shows a count-only
+capacity explanation by date and skill group. The administrator must preserve
+approved VAC and either add qualified relief or formally correct a conflicting
+ED approval in the source Sheet, then re-import and generate again. NurseFlow
+never changes a fixed event merely to obtain a feasible result.
 
 See [solver assumptions](services/solver/ASSUMPTIONS.md) for the explicit
 business-rule interpretations used by the prototype.

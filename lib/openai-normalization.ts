@@ -98,7 +98,7 @@ export async function suggestNormalizations(periodId: string, items: AmbiguousVa
       .slice(0, 32),
     reasoning: { effort: "low" },
     instructions:
-      "Normalize only the provided nurse scheduling tokens. Never infer employee identity or personal information. Every token is a nurse preference, not an immutable assignment; VAC and ED mean requested Vacation and Education. O1-O4 are OFF priorities. O/D and O/N are preferred flexible sets. Mark every non-standard token for human review even when the interpretation is likely. Preserve each input id exactly.",
+      "Normalize only the provided nurse scheduling tokens. Never infer employee identity or personal information and never decide constraint mode. VAC means approved immutable Vacation. ED means Education; the application decides whether it is fixed from staff level. O/D and O/N are required choice sets. O1-O4, D, N, D/N, and unknown values remain soft preferences after human review. Mark every non-standard token for human review even when the interpretation is likely. Preserve each input id exactly.",
     input: [{ role: "user", content: JSON.stringify({ ambiguousTokens: items }) }],
     text: { format: zodTextFormat(ResultSchema, "normalization_candidates"), verbosity: "low" },
   });
