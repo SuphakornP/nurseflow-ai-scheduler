@@ -271,7 +271,9 @@ export async function parseWorkbook(
     dateColumns.forEach(({ index, date }) => {
       if (!expectedDateSet.has(date)) return;
       if (date >= period.startDate && date <= period.endDate) {
-        requests.push(normalizeRequestValue(row[index], nurseId, date));
+        requests.push(
+          normalizeRequestValue(row[index], nurseId, date, "PREFERENCE"),
+        );
       } else {
         const shift = previousShift(row[index]);
         if (!shift) {

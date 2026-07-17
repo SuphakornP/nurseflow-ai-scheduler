@@ -1,4 +1,8 @@
-import type { ShiftCode, ShiftRequest } from "@/lib/types";
+import type {
+  RequestConstraintMode,
+  ShiftCode,
+  ShiftRequest,
+} from "@/lib/types";
 
 const SHIFT_ALIASES: Record<string, ShiftCode> = {
   D: "D",
@@ -25,12 +29,14 @@ export function normalizeRequestValue(
   rawValue: unknown,
   nurseId: string,
   date: string,
+  constraintMode: RequestConstraintMode = "LOCKED",
 ): ShiftRequest {
   const cleaned = clean(rawValue);
   const base = {
     nurseId,
     date,
     rawValue: String(rawValue ?? "").trim(),
+    constraintMode,
   };
 
   if (!cleaned) {

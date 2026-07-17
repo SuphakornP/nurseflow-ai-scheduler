@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 from .models import (
     Assignment,
+    RequestConstraintMode,
     ScheduleProblem,
     ShiftCode,
     SkillLevel,
@@ -158,7 +159,8 @@ def validate_schedule(
             else:
                 locked_clinical_details.append(detail)
         if (
-            normalized.locked_shift is None
+            normalized.constraint_mode == RequestConstraintMode.LOCKED
+            and normalized.locked_shift is None
             and normalized.allowed_assignments is not None
             and actual not in normalized.allowed_assignments
         ):
@@ -178,22 +180,22 @@ def validate_schedule(
             ),
             _check(
                 "VACATION_PRESERVED",
-                "Approved Vacation is immutable",
+                "Admin-approved Vacation locks are preserved",
                 locked_vacation_details,
             ),
             _check(
                 "EDUCATION_PRESERVED",
-                "Explicit Education is immutable",
+                "Admin-approved Education locks are preserved",
                 locked_education_details,
             ),
             _check(
                 "FIXED_CLINICAL_PRESERVED",
-                "Explicit Day and Night assignments are immutable",
+                "Admin-approved Day and Night locks are preserved",
                 locked_clinical_details,
             ),
             _check(
                 "FLEXIBLE_ASSIGNMENT_ALLOWED",
-                "Flexible requests use only their allowed assignments",
+                "Admin-approved assignment sets are preserved",
                 flexible_details,
             ),
         ]

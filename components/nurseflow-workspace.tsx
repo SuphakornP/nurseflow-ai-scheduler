@@ -9,7 +9,6 @@ import {
   parseConfirmationSuccess,
 } from "@/lib/confirmation-eligibility";
 import { SHIFT_LABELS, WORKFLOW_STEPS } from "@/lib/constants";
-import { csvCell } from "@/lib/spreadsheet";
 import type {
   GenerateScheduleResponse,
   RequestOutcome,
@@ -204,7 +203,15 @@ async function enrichAmbiguousRequests(dataset: ScheduleDataset) {
 }
 
 function preferredVersion(response: GenerateScheduleResponse) {
-  return response.versions.find((version) => version.versionNo === 2) ?? response.versions[0];
+  const trustedVersions = response.versions.filter(
+    (version) => getConfirmationGatePresentation(version).state !== "BLOCKED",
+  );
+  return (
+    trustedVersions.find((version) => version.versionNo === 2) ??
+    trustedVersions[0] ??
+    response.versions.find((version) => version.versionNo === 2) ??
+    response.versions[0]
+  );
 }
 
 function initialSelection(response: GenerateScheduleResponse): SelectedAssignment | undefined {
@@ -235,27 +242,6 @@ function downloadBlob(blob: Blob, fileName: string) {
   link.click();
   link.remove();
   URL.revokeObjectURL(href);
-}
-
-function makeDemoCsv(dataset: ScheduleDataset, version: ScheduleVersion) {
-  const dates = getDates(dataset.period.startDate, dataset.period.endDate);
-  const assignmentMap = new Map(
-    version.assignments.map((assignment) => [
-      `${assignment.nurseId}:${assignment.date}`,
-      assignment.shift,
-    ]),
-  );
-  const rows = [
-    ["Nickname", "Skill level", ...dates],
-    ...dataset.nurses.map((nurse) => [
-      nurse.nickname,
-      nurse.skillLevel,
-      ...dates.map((date) => assignmentMap.get(`${nurse.id}:${date}`) ?? "OFF"),
-    ]),
-  ];
-  return rows
-    .map((row) => row.map(csvCell).join(","))
-    .join("\n");
 }
 
 function getOutcome(
@@ -297,6 +283,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
     response.versions.find((version) => version.id === activeVersionId) ?? response.versions[0];
   const baselineVersion = response.versions[0];
   const workingDataset = stagedDataset ?? response.dataset;
+  const hasPendingDataset = stagedDataset !== null;
   const reviewRequests = workingDataset.requests.filter((request) => request.requiresReview);
   const activeStepIndex = WORKFLOW_STEPS.findIndex((step) => step.id === activeStep);
   const selectedOutcome = activeVersion ? getOutcome(activeVersion, selected) : undefined;
@@ -304,7 +291,33 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const isDemoSnapshot = activeVersion?.solverStatus === "DEMO";
   const confirmationEligibility = getConfirmationEligibility(activeVersion);
   const confirmationGate = getConfirmationGatePresentation(activeVersion);
-  const hardRuleStateLabel = confirmationGate.state === "CONFIRMED"
+  const displayedConfirmationGate = hasPendingDataset
+    ? {
+        state: "BLOCKED" as const,
+        className: "is-blocked" as const,
+        label: "Blocked" as const,
+        summary: "Generate imported requests first",
+        description:
+          "This imported request dataset has not been optimized. Generate and validate new candidates before confirmation.",
+        disabledReason:
+          "Generate candidates from the imported request data before choosing, confirming, or exporting a version.",
+      }
+    : confirmationGate;
+  const hasTrustedSchedule = !hasPendingDataset && confirmationGate.state !== "BLOCKED";
+  const canConfirmActiveVersion = !hasPendingDataset && confirmationEligibility.eligible;
+  const selectedVersionBlockReason = displayedConfirmationGate.disabledReason;
+  const displayedValidations = hasPendingDataset ? [] : confirmationEligibility.validations;
+  const trustedVersionCount = hasPendingDataset
+    ? 0
+    : response.versions.filter(
+        (version) => getConfirmationGatePresentation(version).state !== "BLOCKED",
+      ).length;
+  const isSyntheticDataset =
+    workingDataset.nurses.length > 0 &&
+    workingDataset.nurses.every((nurse) => nurse.synthetic === true);
+  const hardRuleStateLabel = hasPendingDataset
+    ? "Awaiting generation"
+    : confirmationGate.state === "CONFIRMED"
     ? "Confirmed"
     : confirmationEligibility.eligible
       ? isDemoSnapshot
@@ -321,15 +334,18 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
     [workingDataset.nurses],
   );
 
-  const applyResponse = useCallback((next: GenerateScheduleResponse) => {
-    setResponse(next);
-    setStagedDataset(null);
-    const nextVersion = preferredVersion(next);
-    setActiveVersionId(nextVersion?.id ?? next.versions[0]?.id);
-    setSelected(initialSelection(next));
-    setExplanation("");
-    setResolvedReviewCount(0);
-  }, []);
+  const applyResponse = useCallback(
+    (next: GenerateScheduleResponse, acceptedReviewCount = 0) => {
+      setResponse(next);
+      setStagedDataset(null);
+      const nextVersion = preferredVersion(next);
+      setActiveVersionId(nextVersion?.id ?? next.versions[0]?.id);
+      setSelected(initialSelection(next));
+      setExplanation("");
+      setResolvedReviewCount(acceptedReviewCount);
+    },
+    [],
+  );
 
   const refreshPersistedHistory = useCallback(async (periodId: string) => {
     const result = await adminFetch(`/api/history?periodId=${encodeURIComponent(periodId)}`, {
@@ -515,19 +531,24 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       }
       const parsed = extractGenerateResponse(await result.json());
       if (!parsed) throw new Error("Generate endpoint returned an unexpected shape.");
-      applyResponse(parsed);
+      applyResponse(parsed, reviewRequests.length);
       setConnectionMode(parsed.mode === "solver" ? "live" : "demo");
+      const trustedCount = parsed.versions.filter(
+        (version) => getConfirmationGatePresentation(version).state !== "BLOCKED",
+      ).length;
       setNotice(
         parsed.mode === "solver"
-          ? "Optimization complete. Three validated candidate schedules are ready."
+          ? trustedCount > 0
+            ? `Optimization complete. ${trustedCount} of ${parsed.versions.length} candidate schedules passed every hard rule and are ready for admin review. Nurse requests are preferences, so unmet requests remain visible.`
+            : "Optimization finished, but no safe roster was produced. Nurse requests may be unmet, but every staffing and safety rule must pass before a version can be chosen."
           : "A precomputed showcase response was loaded. It is labelled DEMO until fresh solver output is available.",
       );
     } catch (error) {
       setConnectionMode(networkOnline ? "error" : "offline");
       setNotice(
         error instanceof Error
-          ? `${error.message} The previous validated candidates remain on screen.`
-          : "Optimization failed. The previous validated candidates remain on screen.",
+          ? `${error.message} The previous schedule view remains on screen and must be rechecked before use.`
+          : "Optimization failed. The previous schedule view remains on screen and must be rechecked before use.",
       );
     } finally {
       setBusyAction(null);
@@ -593,9 +614,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   };
 
   const handleConfirm = async () => {
-    if (!confirmationEligibility.eligible) {
+    if (!canConfirmActiveVersion) {
       setConnectionMode("error");
-      setNotice(confirmationEligibility.message);
+      setNotice(
+        hasPendingDataset
+          ? "Generate candidates from the imported request data before confirmation."
+          : confirmationEligibility.message,
+      );
       setActiveStep("confirm");
       return;
     }
@@ -640,6 +665,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   };
 
   const handleExport = async () => {
+    if (!hasTrustedSchedule) {
+      setConnectionMode("error");
+      setNotice(
+        "Export is blocked because this version does not have complete, passing hard-rule evidence.",
+      );
+      return;
+    }
     setBusyAction("export");
     try {
       const result = await adminFetch("/api/export", {
@@ -650,17 +682,15 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           versionId: activeVersion.id,
         }),
       });
-      if (!result.ok) throw new Error(`Export endpoint returned ${result.status}.`);
+      if (!result.ok) {
+        throw new Error(await responseError(result, "The selected schedule could not be exported."));
+      }
       const blob = await result.blob();
       downloadBlob(blob, `nurseflow-${response.dataset.period.code}-v${activeVersion.versionNo}.xlsx`);
       setNotice("Excel export created from the selected schedule version.");
-    } catch {
-      const csv = makeDemoCsv(response.dataset, activeVersion);
-      downloadBlob(
-        new Blob([csv], { type: "text/csv;charset=utf-8" }),
-        `nurseflow-${response.dataset.period.code}-v${activeVersion.versionNo}-demo.csv`,
-      );
-      setNotice("Export API unavailable. A clearly labelled CSV showcase snapshot was downloaded instead.");
+    } catch (error) {
+      setConnectionMode("error");
+      setNotice(error instanceof Error ? error.message : "The selected schedule could not be exported.");
     } finally {
       setBusyAction(null);
     }
@@ -725,7 +755,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
 
         <div className="header-actions">
           <span className="privacy-badge">
-            <i aria-hidden="true" /> Nickname-only synthetic data
+            <i aria-hidden="true" /> {isSyntheticDataset ? "Nickname-only synthetic data" : "Nickname-only request data"}
           </span>
           <span className="admin-identity" aria-label={`Signed in as ${admin.displayName}, admin`}>
             <i aria-hidden="true">A</i>
@@ -737,7 +767,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <button
             className="button button--ghost"
             type="button"
-            disabled={busyAction === "export"}
+            disabled={busyAction === "export" || !hasTrustedSchedule}
+            title={hasTrustedSchedule ? undefined : "Export requires a safe version with passing hard-rule evidence."}
             onClick={() => void handleExport()}
           >
             {busyAction === "export" ? "Preparing..." : "Export"}
@@ -745,8 +776,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <button
             className="button button--primary"
             type="button"
-            disabled={busyAction === "confirm" || !confirmationEligibility.eligible}
-            title={confirmationEligibility.eligible ? undefined : confirmationGate.disabledReason}
+            disabled={busyAction === "confirm" || !canConfirmActiveVersion}
+            title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
             onClick={() => void handleConfirm()}
           >
             {activeVersion.status === "CONFIRMED"
@@ -776,7 +807,9 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       <nav className="workflow-rail" aria-label="Scheduling workflow">
         {WORKFLOW_STEPS.map((step, index) => {
           const isActive = step.id === activeStep;
-          const isComplete = index < activeStepIndex || activeVersion.status === "CONFIRMED";
+          const isComplete =
+            index < activeStepIndex ||
+            (!hasPendingDataset && activeVersion.status === "CONFIRMED");
           return (
             <button
               className={`${isActive ? "is-active" : ""}${isComplete ? " is-complete" : ""}`}
@@ -895,14 +928,30 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="dock-copy">
               <p className="eyebrow">04 / Compare</p>
               <h2 id="action-dock-title">Version {activeVersion.versionNo}: {activeVersion.name}</h2>
-              <p>Changed cells are marked. Compare request satisfaction, balance, and L0 usage.</p>
+              <p>
+                {hasTrustedSchedule
+                  ? "Compare request satisfaction and workload trade-offs. Unmet requests are expected when safety or coverage takes priority."
+                  : "This result cannot be used as a roster. Review the failed or missing hard-rule evidence, adjust the inputs, and generate again."}
+              </p>
             </div>
             <div className="compare-callout">
-              <strong>{formatPercent(activeVersion.metrics.offSatisfactionRate)}</strong>
-              <span>OFF requests preserved</span>
+              <strong>{hasTrustedSchedule ? formatPercent(activeVersion.metrics.requestSatisfactionRate) : "—"}</strong>
+              <span>{hasTrustedSchedule ? "Requests fulfilled" : "Request metrics unavailable"}</span>
             </div>
-            <button className="button button--primary" type="button" onClick={() => setActiveStep("confirm")}>
-              Choose version {activeVersion.versionNo}
+            <button
+              className="button button--primary"
+              type="button"
+              disabled={!canConfirmActiveVersion}
+              title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
+              onClick={() => setActiveStep("confirm")}
+            >
+              {canConfirmActiveVersion
+                ? `Choose version ${activeVersion.versionNo}`
+                : hasPendingDataset
+                  ? "Generate imported requests first"
+                : activeVersion.status === "CONFIRMED"
+                  ? `Version ${activeVersion.versionNo} confirmed`
+                  : `Version ${activeVersion.versionNo} blocked`}
             </button>
           </>
         ) : null}
@@ -912,18 +961,18 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="dock-copy">
               <p className="eyebrow">05 / Confirm</p>
               <h2 id="action-dock-title">Lock the selected decision</h2>
-              <p>{confirmationGate.description}</p>
+              <p>{displayedConfirmationGate.description}</p>
             </div>
-            <div className={`confirmation-gate ${confirmationGate.className}`}>
-              <span>{confirmationGate.label}</span>
-              <strong>{confirmationGate.summary}</strong>
+            <div className={`confirmation-gate ${displayedConfirmationGate.className}`}>
+              <span>{displayedConfirmationGate.label}</span>
+              <strong>{displayedConfirmationGate.summary}</strong>
             </div>
             <div className="dock-actions">
               <button
                 className="button button--primary"
                 type="button"
-                disabled={busyAction === "confirm" || !confirmationEligibility.eligible}
-                title={confirmationEligibility.eligible ? undefined : confirmationGate.disabledReason}
+                disabled={busyAction === "confirm" || !canConfirmActiveVersion}
+                title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
                 onClick={() => void handleConfirm()}
               >
                 {activeVersion.status === "CONFIRMED" ? "Confirmed" : "Confirm schedule"}
@@ -931,7 +980,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               <button
                 className="button button--ghost"
                 type="button"
-                disabled={busyAction === "export"}
+                disabled={busyAction === "export" || !hasTrustedSchedule}
+                title={hasTrustedSchedule ? undefined : "Export requires a safe version with passing hard-rule evidence."}
                 onClick={() => void handleExport()}
               >
                 Export selected
@@ -944,37 +994,39 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       <section className="metric-band" aria-label="Selected version metrics">
         <div>
           <span>Coverage</span>
-          <strong>10D / 9N</strong>
-          <small>Every day</small>
+          <strong>{hasTrustedSchedule ? "10D / 9N" : "—"}</strong>
+          <small>{hasTrustedSchedule ? "Every day" : "Not validated"}</small>
         </div>
         <div>
           <span>Hard rules</span>
           <strong>
-            {confirmationEligibility.hardTotal > 0
+            {hasPendingDataset
+              ? "—"
+              : confirmationEligibility.hardTotal > 0
               ? `${confirmationEligibility.hardPassed}/${confirmationEligibility.hardTotal}`
               : "No evidence"}
           </strong>
           <small>{hardRuleStateLabel}</small>
         </div>
         <div>
-          <span>OFF preserved</span>
-          <strong>{formatPercent(activeVersion.metrics.offSatisfactionRate)}</strong>
-          <small>O1 at {formatPercent(activeVersion.metrics.o1SatisfactionRate)}</small>
+          <span>Requests met</span>
+          <strong>{hasTrustedSchedule ? formatPercent(activeVersion.metrics.requestSatisfactionRate) : "—"}</strong>
+          <small>{hasTrustedSchedule ? `OFF ${formatPercent(activeVersion.metrics.offSatisfactionRate)} · O1 ${formatPercent(activeVersion.metrics.o1SatisfactionRate)}` : "Unavailable"}</small>
         </div>
         <div>
           <span>Balance</span>
-          <strong>{formatPercent((activeVersion.metrics.dayBalanceScore + activeVersion.metrics.nightBalanceScore) / 2)}</strong>
-          <small>Day and Night</small>
+          <strong>{hasTrustedSchedule ? formatPercent((activeVersion.metrics.dayBalanceScore + activeVersion.metrics.nightBalanceScore) / 2) : "—"}</strong>
+          <small>{hasTrustedSchedule ? "Day and Night" : "Unavailable"}</small>
         </div>
         <div>
           <span>Member L0</span>
-          <strong>{activeVersion.metrics.memberL0Usage}</strong>
-          <small>Clinical shifts</small>
+          <strong>{hasTrustedSchedule ? activeVersion.metrics.memberL0Usage : "—"}</strong>
+          <small>{hasTrustedSchedule ? "Clinical shifts" : "Unavailable"}</small>
         </div>
         <div>
           <span>Version state</span>
-          <strong>{activeVersion.status}</strong>
-          <small>{activeVersion.solverStatus}</small>
+          <strong>{hasPendingDataset ? "PENDING" : activeVersion.status}</strong>
+          <small>{hasPendingDataset ? "NOT GENERATED" : activeVersion.solverStatus}</small>
         </div>
       </section>
 
@@ -985,9 +1037,14 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               <p className="eyebrow">Decision surface</p>
               <div className="surface-title-line">
                 <h2>August roster</h2>
-                {isDemoSnapshot ? <span>Precomputed / DEMO</span> : null}
+                {isDemoSnapshot && !hasPendingDataset ? <span>Precomputed / DEMO</span> : null}
+                {!hasTrustedSchedule ? <span>Preview withheld</span> : null}
               </div>
-              <p>Click any assignment for context. A dot marks changes from version 1.</p>
+              <p>
+                {hasTrustedSchedule
+                  ? "Click any assignment for context. A dot marks changes from version 1."
+                  : "The assignment grid is hidden because this result is not safe to use."}
+              </p>
             </div>
             <div className="surface-tools">
               <div className="shift-legend" aria-label="Shift legend">
@@ -1010,26 +1067,45 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             </div>
           </div>
 
-          <ScheduleMatrix
-            nurses={response.dataset.nurses}
-            version={activeVersion}
-            baselineVersion={baselineVersion}
-            dateWindow={dateWindow}
-            selected={selected}
-            onSelect={selectAssignment}
-          />
+          {hasTrustedSchedule ? (
+            <ScheduleMatrix
+              nurses={response.dataset.nurses}
+              version={activeVersion}
+              baselineVersion={baselineVersion}
+              dateWindow={dateWindow}
+              selected={selected}
+              onSelect={selectAssignment}
+            />
+          ) : (
+            <div className="schedule-scroller" role="status" aria-label="Roster preview unavailable">
+              <div className="confirmation-gate is-blocked">
+                <span>Roster preview withheld</span>
+                <strong>
+                  No assignments are shown until the solver returns a VALID version with complete,
+                  passing hard-rule evidence.
+                </strong>
+              </div>
+            </div>
+          )}
 
           <footer className="surface-footer">
-            <span>{response.dataset.sourceLabel}</span>
-            <span>Context included: 29-31 Jul 2026</span>
-            <span>{isDemoSnapshot ? "Snapshot" : "Generated"} {formatDateTime(activeVersion.generatedAt)}</span>
+            <span>{workingDataset.sourceLabel}</span>
+            <span>
+              Context included: {formatShortDate(workingDataset.period.contextStartDate)}–
+              {formatShortDate(workingDataset.period.contextEndDate)}
+            </span>
+            <span>
+              {hasPendingDataset
+                ? "Awaiting generation"
+                : `${isDemoSnapshot ? "Snapshot" : "Generated"} ${formatDateTime(activeVersion.generatedAt)}`}
+            </span>
           </footer>
         </div>
 
         <aside className="decision-rail" aria-label="Schedule evidence and validation">
           <section className="assignment-focus">
             <p className="eyebrow">Selected decision</p>
-            {selected ? (
+            {hasTrustedSchedule && selected ? (
               <>
                 <div className="focus-heading">
                   <div>
@@ -1075,7 +1151,11 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 </button>
               </>
             ) : (
-              <p className="muted-copy">Choose an assignment in the roster.</p>
+              <p className="muted-copy">
+                {hasTrustedSchedule
+                  ? "Choose an assignment in the roster."
+                  : "No safe assignment is available for review in this version."}
+              </p>
             )}
           </section>
 
@@ -1085,9 +1165,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <p className="eyebrow">Needs explanation</p>
                 <h3>Unfulfilled requests</h3>
               </div>
-              <span>{rejectedOutcomes.length}</span>
+              <span>{hasTrustedSchedule ? rejectedOutcomes.length : "—"}</span>
             </div>
-            {rejectedOutcomes.length ? (
+            {!hasTrustedSchedule ? (
+              <p className="muted-copy">
+                Request trade-offs are shown only after every hard staffing and safety rule passes.
+              </p>
+            ) : rejectedOutcomes.length ? (
               rejectedOutcomes.map((outcome) => {
                 const nurse = nurseById.get(outcome.nurseId);
                 const isSelected =
@@ -1118,11 +1202,11 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <p className="eyebrow">{isDemoSnapshot ? "Reference snapshot" : "Independent check"}</p>
                 <h3>Hard constraints</h3>
               </div>
-              <span>{confirmationGate.summary}</span>
+              <span>{displayedConfirmationGate.summary}</span>
             </div>
-            {confirmationEligibility.validations.length ? (
+            {displayedValidations.length ? (
               <ul>
-                {confirmationEligibility.validations.map((validation) => (
+                {displayedValidations.map((validation) => (
                   <li key={validation.code} className={`is-${validation.status.toLowerCase()}`}>
                     <i aria-hidden="true" />
                     <span>
@@ -1143,12 +1227,26 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       <section className="version-ledger" aria-labelledby="version-ledger-title">
         <div className="version-ledger-heading">
           <p className="eyebrow">Candidate comparison</p>
-          <h2 id="version-ledger-title">One safe roster, different priorities</h2>
-          <p>All candidates pass hard rules. Select a row to update the roster and decision evidence.</p>
+          <h2 id="version-ledger-title">
+            {hasPendingDataset
+              ? "Generate the imported request set"
+              : trustedVersionCount > 0
+                ? "Safe roster options, different trade-offs"
+                : "No safe roster yet"}
+          </h2>
+          <p>
+            {hasPendingDataset
+              ? "The versions below belong to the previous dataset and cannot be chosen, confirmed, or exported. Generate new candidates after review."
+              : trustedVersionCount > 0
+              ? `${trustedVersionCount} of ${response.versions.length} candidates pass every hard rule. Nurse requests remain preferences, and unmet requests stay visible for admin review.`
+              : "None of the candidates passed every hard rule. Unmet nurse requests can be accepted, but staffing and safety rules cannot; adjust the inputs and generate again."}
+          </p>
         </div>
         <div className="version-rows">
           {response.versions.map((version) => {
             const isActive = version.id === activeVersion.id;
+            const versionGate = getConfirmationGatePresentation(version);
+            const isTrustedVersion = !hasPendingDataset && versionGate.state !== "BLOCKED";
             return (
               <button
                 className={isActive ? "is-active" : ""}
@@ -1160,13 +1258,18 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <span className="version-number">V{version.versionNo}</span>
                 <span className="version-name">
                   <strong>{version.name}</strong>
-                  <small>{version.status} / score {version.objectiveScore?.toLocaleString() ?? "-"}</small>
+                  <small>
+                    {hasPendingDataset
+                      ? "Previous dataset / awaiting generation"
+                      : `${version.status} / ${version.solverStatus} / ${versionGate.label}`}
+                    {isTrustedVersion ? ` / score ${version.objectiveScore?.toLocaleString() ?? "-"}` : ""}
+                  </small>
                 </span>
-                <span><small>OFF preserved</small><strong>{formatPercent(version.metrics.offSatisfactionRate)}</strong></span>
-                <span><small>Day balance</small><strong>{formatPercent(version.metrics.dayBalanceScore)}</strong></span>
-                <span><small>Night balance</small><strong>{formatPercent(version.metrics.nightBalanceScore)}</strong></span>
-                <span><small>Member L0</small><strong>{version.metrics.memberL0Usage}</strong></span>
-                <b>{isActive ? "Viewing" : "Compare"}</b>
+                <span><small>Requests met</small><strong>{isTrustedVersion ? formatPercent(version.metrics.requestSatisfactionRate) : "—"}</strong></span>
+                <span><small>Day balance</small><strong>{isTrustedVersion ? formatPercent(version.metrics.dayBalanceScore) : "—"}</strong></span>
+                <span><small>Night balance</small><strong>{isTrustedVersion ? formatPercent(version.metrics.nightBalanceScore) : "—"}</strong></span>
+                <span><small>Member L0</small><strong>{isTrustedVersion ? version.metrics.memberL0Usage : "—"}</strong></span>
+                <b>{isActive ? "Viewing" : isTrustedVersion ? "Compare" : "Inspect"}</b>
               </button>
             );
           })}
@@ -1206,7 +1309,11 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <strong>NurseFlow AI</strong>
           <span>Decision support for nurse schedulers</span>
         </div>
-        <p>Showcase data uses synthetic nicknames only. Human approval remains required.</p>
+        <p>
+          {isSyntheticDataset
+            ? "Showcase data uses synthetic nicknames only. Human approval remains required."
+            : "Imported request data is limited to nicknames. Human approval remains required."}
+        </p>
       </footer>
     </main>
   );

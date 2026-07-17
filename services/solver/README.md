@@ -33,6 +33,11 @@ solver is an internal service. Use the endpoint contract below when testing it.
   assignments are omitted it generates a schedule first. Invalid schedules are
   rejected with HTTP 409.
 
+Each `DailyRequest` has `constraint_mode`. Imported roster requests must use
+`PREFERENCE`, so unmet requests remain visible without invalidating a safe
+schedule. Use `LOCKED` only for an explicit Admin-approved assignment; locked
+values participate in hard validation and can make the problem infeasible.
+
 ## Test
 
 ```bash

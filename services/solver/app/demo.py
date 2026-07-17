@@ -7,6 +7,7 @@ from .models import (
     Nurse,
     OptimizationProfile,
     PreviousAssignment,
+    RequestConstraintMode,
     ScheduleProblem,
     SkillLevel,
     ShiftCode,
@@ -150,6 +151,7 @@ def build_demo_problem(
                 nurse_id=nurse_id,
                 request_date=key[1],
                 raw_value=raw_value,
+                constraint_mode=RequestConstraintMode.LOCKED,
             )
         )
 

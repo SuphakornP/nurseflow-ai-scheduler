@@ -16,6 +16,7 @@ from .models import (
     NurseSummary,
     OptimizationProfile,
     PhaseResult,
+    RequestConstraintMode,
     ScheduleProblem,
     ShiftCode,
     SkillLevel,
@@ -23,7 +24,6 @@ from .models import (
 from .normalization import (
     NormalizationStatus,
     NormalizedRequest,
-    RequestKind,
     normalize_request,
 )
 from .validation import validate_schedule
@@ -44,6 +44,7 @@ class BuiltModel:
     model: cp_model.CpModel
     variables: dict[tuple[str, date, ShiftCode], cp_model.IntVar]
     off_requests: dict[int, list[cp_model.IntVar]]
+    preference_satisfaction: list[cp_model.LinearExpr]
     off_adjacencies: list[cp_model.IntVar]
     fairness_spreads: list[cp_model.IntVar]
     weekend_spreads: list[cp_model.IntVar]
@@ -135,6 +136,7 @@ def _build_model(
                 )
 
     off_requests: dict[int, list[cp_model.IntVar]] = defaultdict(list)
+    preference_satisfaction: list[cp_model.LinearExpr] = []
     l0_weekday_education: list[cp_model.IntVar] = []
     for nurse in problem.nurses:
         for assignment_date in dates:
@@ -150,11 +152,29 @@ def _build_model(
                 )
 
             if request is not None:
+                requested = set(request.allowed_assignments or ())
                 if request.locked_shift is not None:
-                    allowed = {request.locked_shift}
-                elif request.allowed_assignments is not None:
-                    allowed = set(request.allowed_assignments)
-                if request.off_priority is not None:
+                    requested = {request.locked_shift}
+
+                if request.constraint_mode == RequestConstraintMode.LOCKED:
+                    if requested:
+                        allowed = requested
+                else:
+                    # Sheet values express what a nurse would like, not what the
+                    # roster must assign. VAC/ED remain unavailable unless they
+                    # were requested, but every preference may yield to safety.
+                    allowed.update(requested)
+                    if requested:
+                        preference_satisfaction.append(
+                            _sum(
+                                variables[(nurse.id, assignment_date, shift)]
+                                for shift in requested
+                            )
+                        )
+                if (
+                    request.constraint_mode == RequestConstraintMode.PREFERENCE
+                    and request.off_priority is not None
+                ):
                     off_requests[request.off_priority].append(
                         variables[(nurse.id, assignment_date, ShiftCode.OFF)]
                     )
@@ -392,6 +412,7 @@ def _build_model(
         model=model,
         variables=variables,
         off_requests=dict(off_requests),
+        preference_satisfaction=preference_satisfaction,
         off_adjacencies=off_adjacencies,
         fairness_spreads=fairness_spreads,
         weekend_spreads=weekend_spreads,
@@ -512,7 +533,8 @@ def _metrics(
         requests = [
             (key, value)
             for key, value in prepared_requests.items()
-            if value.off_priority == priority
+            if value.constraint_mode == RequestConstraintMode.PREFERENCE
+            and value.off_priority == priority
         ]
         satisfied = sum(
             assignment_map.get(key) == ShiftCode.OFF for key, _ in requests
@@ -527,6 +549,23 @@ def _metrics(
     metrics["OFF_SATISFACTION_RATE"] = (
         round(total_off_satisfied / total_off_requests, 4)
         if total_off_requests
+        else 1.0
+    )
+    preferences = [
+        (key, value)
+        for key, value in prepared_requests.items()
+        if value.constraint_mode == RequestConstraintMode.PREFERENCE
+        and value.allowed_assignments
+    ]
+    preference_satisfied = sum(
+        assignment_map.get(key) in value.allowed_assignments
+        for key, value in preferences
+    )
+    metrics["REQUEST_COUNT"] = len(preferences)
+    metrics["REQUEST_SATISFIED_COUNT"] = preference_satisfied
+    metrics["REQUEST_SATISFACTION_RATE"] = (
+        round(preference_satisfied / len(preferences), 4)
+        if preferences
         else 1.0
     )
     metrics["MEMBER_L0_USAGE"] = sum(
@@ -553,8 +592,21 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
             phases.append(
                 (f"MAXIMIZE_O{priority}", "MAXIMIZE", _sum(phase_values), True)
             )
+    if (
+        problem.optimization_profile == OptimizationProfile.REQUESTS_FIRST
+        and built.preference_satisfaction
+    ):
+        phases.append(
+            (
+                "MAXIMIZE_REQUEST_PREFERENCES",
+                "MAXIMIZE",
+                _sum(built.preference_satisfaction),
+                True,
+            )
+        )
     profile_weights = {
         OptimizationProfile.BALANCED: {
+            "request": 90,
             "off_adjacency": 12,
             "l0_education": 2,
             "fairness": 45,
@@ -562,6 +614,7 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
             "weekend": 30,
         },
         OptimizationProfile.REQUESTS_FIRST: {
+            "request": 220,
             "off_adjacency": 80,
             "l0_education": 2,
             "fairness": 10,
@@ -569,6 +622,7 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
             "weekend": 6,
         },
         OptimizationProfile.MINIMIZE_L0: {
+            "request": 35,
             "off_adjacency": 10,
             "l0_education": 5,
             "fairness": 15,
@@ -577,7 +631,8 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
         },
     }[problem.optimization_profile]
     profile_score = (
-        profile_weights["off_adjacency"] * _sum(built.off_adjacencies)
+        profile_weights["request"] * _sum(built.preference_satisfaction)
+        + profile_weights["off_adjacency"] * _sum(built.off_adjacencies)
         + profile_weights["l0_education"] * _sum(built.l0_weekday_education)
         - profile_weights["fairness"] * _sum(built.fairness_spreads)
         - profile_weights["l0_clinical"] * _sum(built.l0_clinical)

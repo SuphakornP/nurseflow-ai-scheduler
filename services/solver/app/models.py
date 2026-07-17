@@ -36,6 +36,13 @@ class OptimizationProfile(str, Enum):
     MINIMIZE_L0 = "minimize_l0"
 
 
+class RequestConstraintMode(str, Enum):
+    """Whether a request is a preference or an admin-approved immutable lock."""
+
+    PREFERENCE = "PREFERENCE"
+    LOCKED = "LOCKED"
+
+
 class Nurse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,6 +80,7 @@ class DailyRequest(BaseModel):
     request_date: date
     raw_value: str = Field(default="", max_length=MAX_RAW_REQUEST_LENGTH)
     resolution: RequestResolution | None = None
+    constraint_mode: RequestConstraintMode = RequestConstraintMode.PREFERENCE
 
 
 class PreviousAssignment(BaseModel):

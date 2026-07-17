@@ -9,6 +9,7 @@ from openpyxl.utils import get_column_letter
 from .models import (
     Assignment,
     NurseSummary,
+    RequestConstraintMode,
     ScheduleProblem,
     ShiftCode,
     ValidationReport,
@@ -193,10 +194,13 @@ def build_workbook(
     row = 2
     for request in sorted(problem.requests, key=lambda item: (item.request_date, item.nurse_id)):
         normalized = normalize_request(request)
-        if normalized.off_priority is None:
+        if (
+            normalized.constraint_mode != RequestConstraintMode.PREFERENCE
+            or not normalized.allowed_assignments
+        ):
             continue
         assigned = assignment_map.get((request.nurse_id, request.request_date))
-        if assigned == ShiftCode.OFF:
+        if assigned in normalized.allowed_assignments:
             continue
         nurse = nurse_by_id[request.nurse_id]
         values = [

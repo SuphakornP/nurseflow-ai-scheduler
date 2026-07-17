@@ -1,6 +1,9 @@
 export const SHIFT_CODES = ["D", "N", "OFF", "VAC", "ED"] as const;
 export type ShiftCode = (typeof SHIFT_CODES)[number];
 
+export const REQUEST_CONSTRAINT_MODES = ["PREFERENCE", "LOCKED"] as const;
+export type RequestConstraintMode = (typeof REQUEST_CONSTRAINT_MODES)[number];
+
 export const SKILL_LEVELS = [
   "INCHARGE",
   "TRAINEE_INC",
@@ -38,6 +41,8 @@ export interface ShiftRequest {
     | "AMBIGUOUS";
   priority?: 1 | 2 | 3 | 4;
   allowedAssignments: ShiftCode[];
+  /** Imported roster requests are preferences; approved events may be locked. */
+  constraintMode?: RequestConstraintMode;
   confidence: number;
   requiresReview: boolean;
 }
@@ -59,6 +64,7 @@ export interface ConstraintResult {
 }
 
 export interface VersionMetrics {
+  requestSatisfactionRate: number;
   offSatisfactionRate: number;
   o1SatisfactionRate: number;
   dayBalanceScore: number;

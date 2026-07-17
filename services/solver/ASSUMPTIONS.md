@@ -6,8 +6,10 @@ change them later without asking an LLM to rewrite the schedule directly.
 
 ## Hard rules
 
-- `D`, `N`, `VAC`, and `ED` in the current-period input are immutable assignments.
-- `O/D` (`D/O`) allows only `OFF` or `D`; `O/N` (`N/O`) allows only `OFF` or `N`.
+- Only requests with `constraint_mode=LOCKED` are immutable. This mode represents
+  an explicit Admin decision, not a value copied directly from the request Sheet.
+- A locked `O/D` (`D/O`) allows only `OFF` or `D`; a locked `O/N` (`N/O`) allows
+  only `OFF` or `N`.
 - Blank input allows `D`, `N`, or `OFF`.
 - Day staffing is exactly 10 and Night staffing is exactly 9.
 - The published skill ranges apply independently to Day and Night.
@@ -19,10 +21,15 @@ change them later without asking an LLM to rewrite the schedule directly.
   assignments. Missing history breaks a run rather than being guessed.
 - OFF/VAC runs are checked inside the generated period only because the source
   requirement asks previous-month context specifically for D and N rules.
-- Vacation is never relaxed. A Vacation block that itself conflicts with the
-  seven-day OFF/VAC limit makes the problem infeasible.
+- An Admin-locked Vacation block is never relaxed. If it conflicts with a safety
+  rule, the problem is infeasible and requires Admin intervention.
 
 ## Soft rules and optimization order
+
+Imported Sheet values use `constraint_mode=PREFERENCE`. `D`, `N`, `VAC`, `ED`,
+`O/D`, and `O/N` are desired outcomes that may yield to staffing, skill mix, or
+sequence safety. Unfulfilled preferences are reported for Admin review rather
+than making an otherwise safe roster infeasible.
 
 OFF optimization is lexicographic. Each completed phase is frozen before the next:
 
@@ -30,7 +37,8 @@ OFF optimization is lexicographic. Each completed phase is frozen before the nex
 2. Maximize O2 satisfaction.
 3. Maximize O3 satisfaction.
 4. Maximize O4 satisfaction.
-5. Optimize the remaining soft goals with the selected profile:
+5. Optimize the remaining request satisfaction and soft goals with the selected
+   profile:
 
    - `balanced` emphasizes Day/Night and weekend fairness.
    - `requests_first` emphasizes adjacent OFF/VAC blocks.
@@ -48,7 +56,8 @@ of truth rather than regenerated when an existing version is exported.
 The source rule about cutting at most one day from a long OFF block is not treated
 as a hard constraint in this MVP because its scope (per block, person, or month)
 is not defined. OFF priorities and adjacency optimization preserve these requests
-as far as coverage permits, while Vacation remains hard.
+as far as coverage permits. Vacation is hard only after an Admin explicitly locks
+it.
 
 ## Ambiguous input and privacy
 

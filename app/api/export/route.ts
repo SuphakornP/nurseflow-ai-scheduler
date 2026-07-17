@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdminRequest } from "@/lib/auth/request";
+import { getConfirmationEligibility } from "@/lib/confirmation-eligibility";
 import { callSolverBinary, SolverUnavailableError } from "@/lib/solver-client";
 import { getCachedSchedule } from "@/lib/schedule-cache";
 import { datasetToSolverProblem, versionToSolverAssignments } from "@/lib/solver-adapter";
@@ -42,6 +43,19 @@ export async function POST(request: Request) {
         },
         { status: 404 },
       );
+    }
+    if (version) {
+      const eligibility = getConfirmationEligibility(version);
+      if (!eligibility.eligible) {
+        return NextResponse.json(
+          {
+            error: "VERSION_NOT_EXPORTABLE",
+            message:
+              "Only a VALID schedule with complete passing hard-validation evidence can be exported.",
+          },
+          { status: 409 },
+        );
+      }
     }
     const file = await callSolverBinary(
       "/export",

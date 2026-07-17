@@ -1,6 +1,6 @@
 # NurseFlow AI Security Review
 
-Date: 2026-07-16
+Date: 2026-07-17
 
 ## Executive summary
 
@@ -73,6 +73,10 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
 
 ### Output, error, and browser protections
 
+- Confirmation and export reuse the same fail-closed eligibility rule: a
+  candidate must be `VALID`, include non-empty hard-validation evidence, and
+  pass every hard validation (`lib/confirmation-eligibility.ts:123`,
+  `app/api/export/route.ts:48`).
 - CSV and Excel exports neutralize formula-leading cells. The FastAPI exporter also catches formula markers after whitespace/control characters, and export filenames use an ASCII allowlist before entering response headers (`lib/spreadsheet.ts:1`, `services/solver/app/export.py:29`, `services/solver/app/main.py:37`).
 - Authenticated API routes return stable client-safe errors rather than forwarding solver, Supabase, OpenAI, or deployment details. Health output exposes readiness rather than credentials or service URLs.
 - Global responses set a partial CSP, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, a restrictive Permissions Policy, and omit `X-Powered-By` (`next.config.ts:3`).
@@ -93,7 +97,8 @@ This review covers the Next.js/React application, FastAPI solver, Supabase migra
 - `git check-ignore -v .env.local services/solver/.env.local`: both files matched `.gitignore`.
 - `npm audit --audit-level=low`: 0 known vulnerabilities across 598 dependencies.
 - `pip-audit` against the solver virtual environment: no known vulnerabilities; installed pytest is 9.1.1.
-- `npm run test:solver`: 58 tests passed. The only output was an existing Starlette/httpx deprecation warning.
+- `npm run test:web`: 128 tests passed.
+- `npm run test:solver`: 73 tests passed. The only output was an existing Starlette/httpx deprecation warning.
 - Static review of authentication, every Next.js Route Handler, React injection sinks, request-size controls, FastAPI authentication/models/export, OpenAI data flow, Supabase RLS/policies/grants/functions, and deployment files.
 
 ## Release decision

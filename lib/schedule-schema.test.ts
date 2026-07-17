@@ -27,6 +27,7 @@ function dataset() {
         normalizedType: "OFF_REQUEST" as const,
         priority: 1 as const,
         allowedAssignments: ["OFF" as const],
+        constraintMode: "PREFERENCE" as const,
         confidence: 1,
         requiresReview: false,
       },
@@ -68,6 +69,15 @@ describe("schedule dataset schema", () => {
       ...input.requests[0],
       nurseId: "unknown",
       date: "2027-01-01",
+    };
+
+    expect(ScheduleDatasetSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("rejects an unknown request constraint mode", () => {
+    const input = {
+      ...dataset(),
+      requests: [{ ...dataset().requests[0], constraintMode: "REQUIRED" }],
     };
 
     expect(ScheduleDatasetSchema.safeParse(input).success).toBe(false);

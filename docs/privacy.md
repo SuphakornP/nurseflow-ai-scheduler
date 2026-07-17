@@ -23,6 +23,9 @@ approved employee identifier.
   headers are rejected.
 - Raw source rows are not sent to OpenAI.
 - Only ambiguous cell tokens are sent for normalization.
+- Accepted current-period cells are tagged as `PREFERENCE`; importing a Sheet
+  never turns leave, education, or shift requests into immutable assignments.
+  `LOCKED` is reserved for explicit trusted inputs.
 - Explanation requests contain nickname, date, request, assignment, reason code, and solver facts only.
 - The OpenAI request uses `store: false` and a hashed privacy-preserving safety identifier.
 

@@ -35,6 +35,7 @@ function requireString(record: Record<string, unknown>, key: string) {
 function metricRows(version: ScheduleVersion) {
   const percentage = (value: number) => value / 100;
   return [
+    { metric_code: "REQUEST_SATISFACTION_RATE", metric_value: percentage(version.metrics.requestSatisfactionRate) },
     { metric_code: "OFF_SATISFACTION_RATE", metric_value: percentage(version.metrics.offSatisfactionRate) },
     { metric_code: "O1_SATISFACTION_RATE", metric_value: percentage(version.metrics.o1SatisfactionRate) },
     { metric_code: "DAY_BALANCE_SCORE", metric_value: percentage(version.metrics.dayBalanceScore) },
