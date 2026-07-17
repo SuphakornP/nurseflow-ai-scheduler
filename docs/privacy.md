@@ -22,11 +22,25 @@ approved employee identifier.
 - Outside that exact compatibility layout, first-name, last-name, and full-name
   headers are rejected.
 - Raw source rows are not sent to OpenAI.
+- Before an imported workbook can be reused for export, the server removes
+  employee-code/note values, comments, formulas, hyperlinks, unrelated sheets,
+  embedded or external content, defined names, and document properties. Only the
+  bounded sanitized template is cached, and the generated schedule is bound to
+  its SHA-256 snapshot digest.
+- A relationship-free empty drawing placeholder emitted by Google Sheets is
+  accepted only after bounded ZIP inspection, then removed with Google person
+  metadata during serialization. Drawing relationships, media, macros, embedded
+  objects, and other active workbook parts remain rejected.
 - Only ambiguous cell tokens are sent for normalization.
-- Accepted current-period cells are tagged as `PREFERENCE`; importing a Sheet
-  never turns leave, education, or shift requests into immutable assignments.
-  `LOCKED` is reserved for explicit trusted inputs.
+- Request policy is retained without adding identity data: approved `VAC` and
+  non-L0 `ED` are `LOCKED`, O/D and O/N are `REQUIRED` choices, and the remaining
+  requests are `PREFERENCE`. The browser shows these categories separately so a
+  soft satisfaction percentage cannot hide a mandatory event.
 - Explanation requests contain nickname, date, request, assignment, reason code, and solver facts only.
+- Generation failure logs never contain request bodies, bearer tokens, employee
+  values, nicknames, raw normalization values, or upstream validation messages.
+  They contain a generated request ID, optimization profile, aggregate counts,
+  status, and sanitized validation categories only.
 - The OpenAI request uses `store: false` and a hashed privacy-preserving safety identifier.
 
 ## Stored data
@@ -41,6 +55,9 @@ approved employee identifier.
   codes and notes have already been removed, but this JSON should be minimized
   before production.
 - Original uploads belong in a private Supabase Storage bucket with signed access, not a public bucket.
+- The event build keeps a sanitized source template only in process memory for up
+  to eight hours. A restart, expiry, or source-hash mismatch blocks template-based
+  export and requires a new import/generation cycle.
 - Confirmed versions are immutable. Generation and confirmation RPCs append audit
   events, while ordinary table mutations rely on audit fields rather than a
   complete append-only event for every change.

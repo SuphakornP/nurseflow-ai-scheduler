@@ -6,7 +6,7 @@ NurseFlow separates probabilistic language work from deterministic scheduling wo
 
 ```mermaid
 flowchart LR
-    A[Pseudonymous request Sheet or Excel] --> B[Deterministic parser]
+    A[Pseudonymous monthly request Sheet or Excel] --> B[Bounded parser and source sanitizer]
     B --> C[AI ambiguity suggestions]
     C --> D[Human review]
     D --> E[CP-SAT optimizer]
@@ -17,16 +17,19 @@ flowchart LR
     H -->|regenerate| E
     H -->|choose eligible version| I[Fail-closed approval gate]
     I -->|confirm| S[Supabase version record]
-    I -->|export| J[Validated Excel workbook]
+    I -->|export to bound source snapshot| J[Validated Excel workbook]
 ```
 
 - The parser handles casing, whitespace, aliases, and known request syntax before AI is called.
-- Sheet cells are nurse preferences, including leave and education requests; they do not override hard staffing, skill-mix, completeness, or sequence rules.
-- The importer never creates hard locks. `LOCKED` is reserved for an explicit trusted administrator decision or a controlled synthetic fixture.
+- Each import creates a hash-bound, privacy-sanitized first-sheet template. Export
+  preserves its cell styling but cannot reuse a newer template for an older
+  generated version.
+- The importer classifies approved Vacation and non-L0 Education as fixed `LOCKED` events, and O/D or O/N as `REQUIRED` choice sets.
+- Member L0 Education, OFF priorities, Day, Night, and blank availability remain `PREFERENCE`; only these soft inputs may yield to hard constraints.
 - GPT-5.6 Terra sees only ambiguous tokens or structured reason facts, never full source rows.
 - CP-SAT is the only component allowed to create a complete roster.
 - The validator re-computes every hard rule from assignments and previous-month context.
-- The administrator compares three optimization profiles, including unmet requests, before choosing a version.
+- The administrator compares three optimization profiles, with mandatory evidence separated from unmet soft requests, before choosing a version.
 - Confirmation and export require `VALID` status plus a nonempty, entirely passing hard-validation set. Confirmation is executed atomically in Postgres when persistence is configured.
 
 ## Runtime components
@@ -66,10 +69,14 @@ The browser never calls the solver directly. FastAPI does not enable CORS; Next.
 
 - Missing OpenAI key: deterministic suggestions and reason-code explanations; human review remains required.
 - Missing Supabase credentials: local showcase session only, clearly labeled as not persisted.
-- Solver unavailable: API returns a client-safe `503` without exposing service configuration.
+- Solver input rejected: FastAPI returns `422`; Next.js preserves `422`, adds a
+  server-generated `x-request-id`, and logs only the profile, aggregate counts,
+  safe validation categories, and allowlisted field paths.
+- Solver unavailable: transport, authentication, and upstream service failures
+  return a client-safe `503` without exposing service configuration.
 - Missing or invalid admin configuration: login fails closed with `503`; anonymous pages redirect to `/login` and anonymous APIs return `401`.
 - Missing or invalid solver token: work endpoints fail closed; the solver health check remains minimal and public for service orchestration.
-- Infeasible datasets or missing/malformed hard-validation evidence: no synthetic success response; confirmation and export remain blocked.
+- Infeasible datasets or missing/malformed hard-validation evidence: no synthetic success response; confirmation and export remain blocked. Deterministic fixed-event capacity conflicts are returned as date/skill evidence so Admin can add relief or correct the approved source before re-importing.
 - OpenAI failure with a configured key: API returns `502`; it does not silently present a generated explanation as an AI result.
 
 ## Deployment shape

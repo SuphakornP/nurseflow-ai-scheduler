@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from time import perf_counter
@@ -20,11 +20,15 @@ from .models import (
     ScheduleProblem,
     ShiftCode,
     SkillLevel,
+    ValidationCheck,
+    ValidationReport,
 )
 from .normalization import (
     NormalizationStatus,
     NormalizedRequest,
+    find_long_off_blocks,
     normalize_request,
+    request_semantics_error,
 )
 from .validation import validate_schedule
 
@@ -64,6 +68,7 @@ def prepare_requests(
 ) -> dict[tuple[str, date], NormalizedRequest]:
     prepared: dict[tuple[str, date], NormalizedRequest] = {}
     errors: list[str] = []
+    nurses_by_id = {nurse.id: nurse for nurse in problem.nurses}
     for request in problem.requests:
         normalized = normalize_request(request)
         if normalized.status == NormalizationStatus.NEEDS_REVIEW:
@@ -71,6 +76,15 @@ def prepare_requests(
                 f"{request.nurse_id} {request.request_date}: "
                 f"'{request.raw_value}' needs review"
             )
+        else:
+            semantics_error = request_semantics_error(
+                normalized,
+                nurses_by_id[request.nurse_id].skill_level,
+            )
+            if semantics_error:
+                errors.append(
+                    f"{request.nurse_id} {request.request_date}: {semantics_error}"
+                )
         prepared[(request.nurse_id, request.request_date)] = normalized
     if errors:
         raise InputProblemError(errors)
@@ -117,6 +131,67 @@ def _sum(items: Iterable[cp_model.LinearExpr | int]) -> cp_model.LinearExpr | in
     return sum(materialized) if materialized else 0
 
 
+def _mandatory_capacity_validation(
+    problem: ScheduleProblem,
+    prepared_requests: dict[tuple[str, date], NormalizedRequest],
+) -> ValidationReport | None:
+    """Explain deterministic staffing shortages caused by immutable events."""
+
+    nurses_by_id = {nurse.id: nurse for nurse in problem.nurses}
+    nurse_totals = Counter(nurse.skill_level for nurse in problem.nurses)
+    fixed_absences: Counter[tuple[date, SkillLevel, ShiftCode]] = Counter()
+    for (nurse_id, request_date), request in prepared_requests.items():
+        if request.locked_shift not in {ShiftCode.VACATION, ShiftCode.EDUCATION}:
+            continue
+        fixed_absences[
+            (request_date, nurses_by_id[nurse_id].skill_level, request.locked_shift)
+        ] += 1
+
+    details: list[str] = []
+    for assignment_date in period_dates(problem):
+        for skill_level, staffing_range in problem.rules.skill_ranges.items():
+            fixed_by_shift = {
+                shift: fixed_absences[(assignment_date, skill_level, shift)]
+                for shift in (ShiftCode.VACATION, ShiftCode.EDUCATION)
+            }
+            fixed_count = sum(fixed_by_shift.values())
+            available = nurse_totals[skill_level] - fixed_count
+            required = staffing_range.minimum * 2
+            if available >= required:
+                continue
+            fixed_summary = ", ".join(
+                f"{count} {shift.value}"
+                for shift, count in fixed_by_shift.items()
+                if count
+            )
+            action = (
+                "Preserve VAC; add qualified relief or formally reschedule a fixed ED "
+                "in the source approval, then reimport."
+                if fixed_by_shift[ShiftCode.EDUCATION]
+                else "Preserve approved VAC and add qualified relief before regenerating."
+            )
+            details.append(
+                f"{assignment_date.isoformat()}: {skill_level.value} has {available} "
+                f"available but Day + Night require at least {required}. Fixed events: "
+                f"{fixed_summary}. {action}"
+            )
+
+    if not details:
+        return None
+    return ValidationReport(
+        is_valid=False,
+        checks=[
+            ValidationCheck(
+                code="MANDATORY_SKILL_CAPACITY",
+                name="Fixed events exceed skill capacity",
+                status="FAIL",
+                violation_count=len(details),
+                details=details,
+            )
+        ],
+    )
+
+
 def _build_model(
     problem: ScheduleProblem,
     prepared_requests: dict[tuple[str, date], NormalizedRequest],
@@ -141,12 +216,16 @@ def _build_model(
     for nurse in problem.nurses:
         for assignment_date in dates:
             request = prepared_requests.get((nurse.id, assignment_date))
-            allowed = {ShiftCode.DAY, ShiftCode.NIGHT, ShiftCode.OFF}
-            if (
+            is_l0_weekday = (
                 nurse.skill_level == SkillLevel.MEMBER_L0
                 and assignment_date.weekday() < 5
-            ):
-                allowed.add(ShiftCode.EDUCATION)
+            )
+            allowed = (
+                {ShiftCode.DAY, ShiftCode.NIGHT, ShiftCode.EDUCATION}
+                if is_l0_weekday
+                else {ShiftCode.DAY, ShiftCode.NIGHT, ShiftCode.OFF}
+            )
+            if is_l0_weekday:
                 l0_weekday_education.append(
                     variables[(nurse.id, assignment_date, ShiftCode.EDUCATION)]
                 )
@@ -156,15 +235,17 @@ def _build_model(
                 if request.locked_shift is not None:
                     requested = {request.locked_shift}
 
-                if request.constraint_mode == RequestConstraintMode.LOCKED:
+                if request.constraint_mode in {
+                    RequestConstraintMode.LOCKED,
+                    RequestConstraintMode.REQUIRED,
+                }:
                     if requested:
                         allowed = requested
                 else:
-                    # Sheet values express what a nurse would like, not what the
-                    # roster must assign. VAC/ED remain unavailable unless they
-                    # were requested, but every preference may yield to safety.
+                    # D/N, O1-O4, and L0 ED are preferences. Approved VAC/ED and
+                    # O/D or O/N arrive as LOCKED/REQUIRED and never use this path.
                     allowed.update(requested)
-                    if requested:
+                    if requested and request.off_priority is None:
                         preference_satisfaction.append(
                             _sum(
                                 variables[(nurse.id, assignment_date, shift)]
@@ -186,6 +267,19 @@ def _build_model(
             for shift in ALL_SHIFTS:
                 if shift not in allowed:
                     model.Add(variables[(nurse.id, assignment_date, shift)] == 0)
+
+    # A requested OFF/VAC block longer than four days may lose at most one OFF.
+    # Vacation cells are immutable independently and therefore are never counted
+    # among the relaxable cells here.
+    for block in find_long_off_blocks(prepared_requests):
+        if block.off_dates:
+            model.Add(
+                _sum(
+                    variables[(block.nurse_id, request_date, ShiftCode.OFF)]
+                    for request_date in block.off_dates
+                )
+                >= len(block.off_dates) - 1
+            )
 
     for assignment_date in dates:
         for shift, target in (
@@ -482,7 +576,7 @@ def summarize_assignments(
                 + counts[ShiftCode.NIGHT],
                 weekend_clinical_count=weekend_clinical,
                 total_hours=(counts[ShiftCode.DAY] + counts[ShiftCode.NIGHT]) * 12
-                + counts[ShiftCode.EDUCATION] * 8,
+                + (counts[ShiftCode.VACATION] + counts[ShiftCode.EDUCATION]) * 8,
             )
         )
 
@@ -592,10 +686,7 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
             phases.append(
                 (f"MAXIMIZE_O{priority}", "MAXIMIZE", _sum(phase_values), True)
             )
-    if (
-        problem.optimization_profile == OptimizationProfile.REQUESTS_FIRST
-        and built.preference_satisfaction
-    ):
+    if built.preference_satisfaction:
         phases.append(
             (
                 "MAXIMIZE_REQUEST_PREFERENCES",
@@ -604,6 +695,44 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
                 True,
             )
         )
+    if built.off_adjacencies:
+        phases.append(
+            (
+                "MAXIMIZE_OFF_VAC_ADJACENCY",
+                "MAXIMIZE",
+                _sum(built.off_adjacencies),
+                True,
+            )
+        )
+    if built.fairness_spreads:
+        phases.append(
+            (
+                "MINIMIZE_DAY_NIGHT_IMBALANCE",
+                "MINIMIZE",
+                _sum(built.fairness_spreads),
+                True,
+            )
+        )
+    if built.l0_clinical:
+        phases.append(
+            (
+                "MINIMIZE_MEMBER_L0_CLINICAL",
+                "MINIMIZE",
+                _sum(built.l0_clinical),
+                True,
+            )
+        )
+    if built.weekend_spreads:
+        phases.append(
+            (
+                "MINIMIZE_WEEKEND_IMBALANCE",
+                "MINIMIZE",
+                _sum(built.weekend_spreads),
+                True,
+            )
+        )
+
+    # Profiles only break ties after every shared hospital priority is frozen.
     profile_weights = {
         OptimizationProfile.BALANCED: {
             "request": 90,
@@ -640,7 +769,7 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
     )
     phases.append(
         (
-            f"OPTIMIZE_PROFILE_{problem.optimization_profile.value.upper()}",
+            f"TIE_BREAK_PROFILE_{problem.optimization_profile.value.upper()}",
             "MAXIMIZE",
             profile_score,
             True,
@@ -673,10 +802,16 @@ def generate_schedule(problem: ScheduleProblem) -> GenerateResponse:
         if status not in (cp_model.FEASIBLE, cp_model.OPTIMAL):
             if last_values is None:
                 elapsed = int((perf_counter() - started) * 1000)
+                diagnostic = _mandatory_capacity_validation(problem, prepared_requests)
                 return GenerateResponse(
                     status=solver.StatusName(status),
-                    message="No feasible schedule was found within the configured limit",
+                    message=(
+                        diagnostic.checks[0].details[0]
+                        if diagnostic
+                        else "No feasible schedule was found within the configured limit"
+                    ),
                     phases=phase_results,
+                    validation=diagnostic,
                     solver_duration_ms=elapsed,
                 )
             break

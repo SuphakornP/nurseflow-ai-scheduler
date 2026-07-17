@@ -6,30 +6,41 @@ change them later without asking an LLM to rewrite the schedule directly.
 
 ## Hard rules
 
-- Only requests with `constraint_mode=LOCKED` are immutable. This mode represents
-  an explicit Admin decision, not a value copied directly from the request Sheet.
-- A locked `O/D` (`D/O`) allows only `OFF` or `D`; a locked `O/N` (`N/O`) allows
-  only `OFF` or `N`.
-- Blank input allows `D`, `N`, or `OFF`.
+- Approved Vacation uses `constraint_mode=LOCKED` and is immutable. Ordinary-RN
+  Education is also `LOCKED`; a conflicting lock makes the model infeasible
+  instead of silently changing the event.
+- `O/D` (`D/O`) and `O/N` (`N/O`) use `constraint_mode=REQUIRED`. They restrict
+  the assignment to `OFF|D` and `OFF|N`, respectively, without fixing which of
+  the two the solver selects. Legacy Admin-locked assignment sets remain valid.
+- Blank input allows `D`, `N`, or `OFF` for ordinary staff; the weekday Member L0
+  default described below replaces `OFF` with `ED`.
 - Day staffing is exactly 10 and Night staffing is exactly 9.
 - The published skill ranges apply independently to Day and Night.
 - The canonical trainee skill code is `TRAINEE_INC`, matching the shared app and
   database contract.
 - Member L0 counts toward total staffing and may work at most seven clinical
-  shifts in the period.
+  shifts in the period. On weekdays, its non-clinical default is Education;
+  OFF is available only for an explicit O1-O4 or required/locked OFF choice,
+  while approved Vacation remains allowed.
 - D and N runs, total clinical runs, N-to-D, and N-to-ED use provided previous
   assignments. Missing history breaks a run rather than being guessed.
 - OFF/VAC runs are checked inside the generated period only because the source
   requirement asks previous-month context specifically for D and N rules.
-- An Admin-locked Vacation block is never relaxed. If it conflicts with a safety
-  rule, the problem is infeasible and requires Admin intervention.
+- A maximal contiguous run of explicit O1-O4 and locked Vacation longer than
+  four days may lose at most one requested OFF. Vacation is never counted as a
+  relaxable day. If one OFF cut cannot make the block safe, generation returns
+  infeasible for Admin intervention.
+- A deterministic preflight explanation is attached when fixed VAC/ED events
+  leave too few nurses in a skill group to meet both shifts. The explanation is
+  aggregate by date and skill, never by employee identifier. It does not relax
+  VAC, ED, or staffing rules.
 
 ## Soft rules and optimization order
 
-Imported Sheet values use `constraint_mode=PREFERENCE`. `D`, `N`, `VAC`, `ED`,
-`O/D`, and `O/N` are desired outcomes that may yield to staffing, skill mix, or
-sequence safety. Unfulfilled preferences are reported for Admin review rather
-than making an otherwise safe roster infeasible.
+`D`, `N`, and O1-O4 are nurse preferences. Member L0 may also prefer Education.
+They may yield only as allowed by the long-block rule, staffing, skill mix, and
+sequence safety. Unfulfilled preferences are reported for Admin review. VAC,
+ordinary-RN ED, O/D, and O/N instead use the hard modes described above.
 
 OFF optimization is lexicographic. Each completed phase is frozen before the next:
 
@@ -37,15 +48,14 @@ OFF optimization is lexicographic. Each completed phase is frozen before the nex
 2. Maximize O2 satisfaction.
 3. Maximize O3 satisfaction.
 4. Maximize O4 satisfaction.
-5. Optimize the remaining request satisfaction and soft goals with the selected
-   profile:
+5. Maximize remaining non-O preferences.
+6. Maximize adjacent assigned OFF/VAC days.
+7. Minimize Day and Night workload spreads within comparable skill groups.
+8. Minimize Member L0 clinical use.
+9. Minimize weekend workload spreads.
+10. Apply the selected profile only as a final deterministic tie-break.
 
-   - `balanced` emphasizes Day/Night and weekend fairness.
-   - `requests_first` emphasizes adjacent OFF/VAC blocks.
-   - `minimize_l0` places the strongest penalty on Member L0 clinical use.
-
-The profile score also rewards weekday ED for Member L0. Profile weights never
-change the frozen O1 through O4 satisfaction counts.
+Profiles never change any frozen hospital-priority value.
 
 When a phase reaches only `FEASIBLE` before its time limit, the best value found is
 frozen and reported as not proven optimal. This is transparent in `phases`.
@@ -53,11 +63,9 @@ CP-SAT uses eight search workers for responsive 28x31 generation. The demo input
 and random seed are deterministic; assignments are persisted as the version source
 of truth rather than regenerated when an existing version is exported.
 
-The source rule about cutting at most one day from a long OFF block is not treated
-as a hard constraint in this MVP because its scope (per block, person, or month)
-is not defined. OFF priorities and adjacency optimization preserve these requests
-as far as coverage permits. Vacation is hard only after an Admin explicitly locks
-it.
+The one-cut rule is scoped per maximal contiguous requested OFF/VAC block for one
+nurse. Blocks of four days or fewer use normal O1-O4 optimization; blocks longer
+than four receive the additional hard one-cut limit.
 
 ## Ambiguous input and privacy
 

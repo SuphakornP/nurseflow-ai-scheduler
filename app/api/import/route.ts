@@ -7,6 +7,8 @@ import {
   parseWorkbook,
 } from "@/lib/importer";
 import { readBodyWithLimit, RequestBodyTooLargeError } from "@/lib/request-body";
+import { cacheSourceWorkbookTemplate } from "@/lib/source-workbook-cache";
+import { prepareSourceWorkbookTemplate } from "@/lib/source-workbook-template";
 import type { SchedulePeriod } from "@/lib/types";
 
 const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
@@ -15,15 +17,41 @@ const MAX_JSON_REQUEST_BYTES = 256 * 1024;
 const GOOGLE_SHEET_TIMEOUT_MS = 15_000;
 
 const PeriodSchema = z.object({
-  id: z.string().min(1),
-  code: z.string().min(1),
-  name: z.string().min(1),
-  departmentCode: z.string().min(1),
+  id: z.string().min(1).max(120),
+  code: z.string().min(1).max(120),
+  name: z.string().min(1).max(120),
+  departmentCode: z.string().min(1).max(80),
   startDate: z.iso.date(),
   endDate: z.iso.date(),
   contextStartDate: z.iso.date(),
   contextEndDate: z.iso.date(),
   status: z.enum(["DRAFT", "READY", "GENERATED", "CONFIRMED"]),
+}).strict().superRefine((period, context) => {
+  const dayCount = (start: string, end: string) =>
+    Math.floor(
+      (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) /
+        86_400_000,
+    ) + 1;
+  const periodDays = dayCount(period.startDate, period.endDate);
+  if (periodDays < 1 || periodDays > 62) {
+    context.addIssue({
+      code: "custom",
+      path: ["endDate"],
+      message: "The scheduling period must contain 1 to 62 days.",
+    });
+  }
+  const contextDays = dayCount(period.contextStartDate, period.contextEndDate);
+  if (
+    contextDays < 1 ||
+    contextDays > 62 ||
+    period.contextEndDate >= period.startDate
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["contextEndDate"],
+      message: "Previous-period context must contain 1 to 62 dates before the schedule.",
+    });
+  }
 });
 
 const defaultPeriod: SchedulePeriod = {
@@ -82,7 +110,16 @@ export async function POST(request: Request) {
     let period = defaultPeriod;
 
     if (contentType.includes("multipart/form-data")) {
-      const form = await request.formData();
+      const multipartBytes = await readBodyWithLimit(
+        request.body,
+        MAX_IMPORT_REQUEST_BYTES,
+      );
+      const boundedRequest = new Request(request.url, {
+        method: "POST",
+        headers: { "content-type": contentType },
+        body: multipartBytes,
+      });
+      const form = await boundedRequest.formData();
       const file = form.get("file");
       if (!(file instanceof File)) {
         throw new ImportValidationError("Choose an .xlsx file to import.");
@@ -108,7 +145,13 @@ export async function POST(request: Request) {
       sourceLabel = "Google Sheet";
     }
 
-    const dataset = await parseWorkbook(bytes, period, sourceLabel);
+    const parsedDataset = await parseWorkbook(bytes, period, sourceLabel);
+    const sourceTemplate = await prepareSourceWorkbookTemplate(bytes, parsedDataset);
+    const dataset = {
+      ...parsedDataset,
+      sourceWorkbookHash: sourceTemplate.sourceHash,
+    };
+    cacheSourceWorkbookTemplate(dataset.period.id, sourceTemplate);
     return NextResponse.json({
       dataset,
       summary: {

@@ -1,7 +1,7 @@
 export const SHIFT_CODES = ["D", "N", "OFF", "VAC", "ED"] as const;
 export type ShiftCode = (typeof SHIFT_CODES)[number];
 
-export const REQUEST_CONSTRAINT_MODES = ["PREFERENCE", "LOCKED"] as const;
+export const REQUEST_CONSTRAINT_MODES = ["PREFERENCE", "REQUIRED", "LOCKED"] as const;
 export type RequestConstraintMode = (typeof REQUEST_CONSTRAINT_MODES)[number];
 
 export const SKILL_LEVELS = [
@@ -41,8 +41,8 @@ export interface ShiftRequest {
     | "AMBIGUOUS";
   priority?: 1 | 2 | 3 | 4;
   allowedAssignments: ShiftCode[];
-  /** Imported roster requests are preferences; approved events may be locked. */
-  constraintMode?: RequestConstraintMode;
+  /** Soft wishes, required choice sets, and immutable approved events stay explicit. */
+  constraintMode: RequestConstraintMode;
   confidence: number;
   requiresReview: boolean;
 }
@@ -64,6 +64,7 @@ export interface ConstraintResult {
 }
 
 export interface VersionMetrics {
+  /** Satisfaction among PREFERENCE entries only. */
   requestSatisfactionRate: number;
   offSatisfactionRate: number;
   o1SatisfactionRate: number;
@@ -73,12 +74,18 @@ export interface VersionMetrics {
   memberL0Usage: number;
   hardConstraintsPassed: number;
   hardConstraintsTotal: number;
+  lockedRequirementsPassed: number;
+  lockedRequirementsTotal: number;
+  requiredChoicesPassed: number;
+  requiredChoicesTotal: number;
 }
 
 export interface RequestOutcome {
   nurseId: string;
   date: string;
   requested: string;
+  normalizedType: ShiftRequest["normalizedType"];
+  constraintMode: RequestConstraintMode;
   assigned: ShiftCode;
   priority?: number;
   satisfied: boolean;
@@ -120,6 +127,8 @@ export interface ScheduleDataset {
   requests: ShiftRequest[];
   previousAssignments: Assignment[];
   sourceLabel: string;
+  /** Server-generated digest binding a generated version to its sanitized source template. */
+  sourceWorkbookHash?: string;
   privacyMode: "NICKNAME_ONLY";
 }
 

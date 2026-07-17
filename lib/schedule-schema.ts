@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { constraintModeForNormalizedType } from "@/lib/request-semantics";
 
 export const MAX_SCHEDULE_NURSES = 100;
 export const MAX_SCHEDULE_DAYS = 62;
@@ -54,7 +55,7 @@ const ShiftRequestSchema = z
       .union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)])
       .optional(),
     allowedAssignments: z.array(ShiftCodeSchema).max(5),
-    constraintMode: z.enum(["PREFERENCE", "LOCKED"]).optional(),
+    constraintMode: z.enum(["PREFERENCE", "REQUIRED", "LOCKED"]),
     confidence: z.number().min(0).max(1),
     requiresReview: z.boolean(),
   })
@@ -76,6 +77,7 @@ export const ScheduleDatasetSchema = z
     requests: z.array(ShiftRequestSchema).max(MAX_SCHEDULE_ITEMS),
     previousAssignments: z.array(PreviousAssignmentSchema).max(MAX_SCHEDULE_ITEMS),
     sourceLabel: z.string().min(1).max(200),
+    sourceWorkbookHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     privacyMode: z.literal("NICKNAME_ONLY"),
   })
   .strict()
@@ -95,6 +97,7 @@ export const ScheduleDatasetSchema = z
     }
 
     const nurseIds = new Set<string>();
+    const skillByNurseId = new Map<string, z.infer<typeof SkillLevelSchema>>();
     for (const [index, nurse] of dataset.nurses.entries()) {
       if (nurseIds.has(nurse.id)) {
         context.addIssue({
@@ -104,6 +107,7 @@ export const ScheduleDatasetSchema = z
         });
       }
       nurseIds.add(nurse.id);
+      skillByNurseId.set(nurse.id, nurse.skillLevel);
     }
 
     const requestKeys = new Set<string>();
@@ -121,6 +125,20 @@ export const ScheduleDatasetSchema = z
           path: ["requests", index, "date"],
           message: "Requests must be inside the scheduling period.",
         });
+      }
+      const skillLevel = skillByNurseId.get(request.nurseId);
+      if (skillLevel) {
+        const expectedMode = constraintModeForNormalizedType(
+          request.normalizedType,
+          skillLevel,
+        );
+        if (request.constraintMode !== expectedMode) {
+          context.addIssue({
+            code: "custom",
+            path: ["requests", index, "constraintMode"],
+            message: `${request.normalizedType} must use ${expectedMode} constraint mode.`,
+          });
+        }
       }
       const key = `${request.nurseId}\0${request.date}`;
       if (requestKeys.has(key)) {

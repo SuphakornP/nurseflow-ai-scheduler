@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import date
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 MAX_NURSES = 100
@@ -12,6 +14,8 @@ MAX_PERIOD_DAYS = 62
 MAX_SCHEDULE_ENTRIES = MAX_NURSES * MAX_PERIOD_DAYS
 MAX_STAFFING_PER_SHIFT = MAX_NURSES
 MAX_RAW_REQUEST_LENGTH = 120
+MAX_SOURCE_WORKBOOK_BYTES = 10 * 1024 * 1024
+MAX_SOURCE_WORKBOOK_BASE64_LENGTH = ((MAX_SOURCE_WORKBOOK_BYTES + 2) // 3) * 4
 
 
 class SkillLevel(str, Enum):
@@ -37,9 +41,10 @@ class OptimizationProfile(str, Enum):
 
 
 class RequestConstraintMode(str, Enum):
-    """Whether a request is a preference or an admin-approved immutable lock."""
+    """How the scheduler must interpret a normalized request value."""
 
     PREFERENCE = "PREFERENCE"
+    REQUIRED = "REQUIRED"
     LOCKED = "LOCKED"
 
 
@@ -278,6 +283,53 @@ class GenerateResponse(BaseModel):
     solver_duration_ms: int = 0
 
 
+class SourceWorkbookTemplate(BaseModel):
+    """Sanitized source sheet plus server-generated cell mappings for export."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content_base64: str = Field(
+        min_length=1,
+        max_length=MAX_SOURCE_WORKBOOK_BASE64_LENGTH,
+    )
+    worksheet_name: str = Field(min_length=1, max_length=31)
+    nurse_rows: dict[str, int] = Field(min_length=1, max_length=MAX_NURSES)
+    date_columns: dict[date, int] = Field(min_length=1, max_length=MAX_PERIOD_DAYS)
+
+    @field_validator("content_base64")
+    @classmethod
+    def validate_workbook_content(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("source workbook content must be valid base64") from exc
+        if len(decoded) > MAX_SOURCE_WORKBOOK_BYTES:
+            raise ValueError("source workbook exceeds the 10 MB limit")
+        if not decoded.startswith(b"PK"):
+            raise ValueError("source workbook must be an xlsx file")
+        return value
+
+    @field_validator("nurse_rows")
+    @classmethod
+    def validate_nurse_rows(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(not nurse_id or len(nurse_id) > 64 for nurse_id in value):
+            raise ValueError("source workbook nurse ids are invalid")
+        if any(row < 1 or row > 1_048_576 for row in value.values()):
+            raise ValueError("source workbook nurse rows are invalid")
+        if len(set(value.values())) != len(value):
+            raise ValueError("source workbook nurse rows must be unique")
+        return value
+
+    @field_validator("date_columns")
+    @classmethod
+    def validate_date_columns(cls, value: dict[date, int]) -> dict[date, int]:
+        if any(column < 1 or column > 16_384 for column in value.values()):
+            raise ValueError("source workbook date columns are invalid")
+        if len(set(value.values())) != len(value):
+            raise ValueError("source workbook date columns must be unique")
+        return value
+
+
 class ExportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -286,3 +338,4 @@ class ExportRequest(BaseModel):
         default=None,
         max_length=MAX_SCHEDULE_ENTRIES,
     )
+    source_workbook_template: SourceWorkbookTemplate | None = None

@@ -22,9 +22,9 @@ const SolverProblemSchema = z.object({
       nurse_id: z.string(),
       request_date: z.string(),
       raw_value: z.string(),
-      // Historical confirmed versions predate explicit request semantics and
-      // used fixed values, so preserve those as locks during reconstruction.
-      constraint_mode: z.enum(["PREFERENCE", "LOCKED"]).default("LOCKED"),
+      // Historical confirmed versions predate explicit request semantics. A
+      // fail-safe LOCKED default prevents archived approved events from relaxing.
+      constraint_mode: z.enum(["PREFERENCE", "REQUIRED", "LOCKED"]).default("LOCKED"),
       resolution: z
         .object({
           allowed_assignments: z.array(ShiftSchema).optional(),
@@ -74,6 +74,12 @@ export async function loadPersistedVersionForExport(scheduleVersionId: string) {
   }
   const version = PersistedVersionSchema.parse(versionData);
   const problem = SolverProblemSchema.parse(version.generation_summary.solver_problem);
+  const sourceWorkbookHash = z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .optional()
+    .parse(version.generation_summary.source_workbook_hash);
 
   const [assignmentsResult, employeesResult, shiftsResult] = await Promise.all([
     supabase
@@ -131,5 +137,5 @@ export async function loadPersistedVersionForExport(scheduleVersionId: string) {
     };
   });
 
-  return { problem, assignments };
+  return { problem, assignments, sourceWorkbookHash: sourceWorkbookHash ?? null };
 }

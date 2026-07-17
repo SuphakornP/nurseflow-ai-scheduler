@@ -9,12 +9,16 @@ import {
   parseConfirmationSuccess,
 } from "@/lib/confirmation-eligibility";
 import { SHIFT_LABELS, WORKFLOW_STEPS } from "@/lib/constants";
+import {
+  constraintModeForNormalizedType,
+  requestPolicyLabel,
+} from "@/lib/request-semantics";
+import { assignmentsForNormalizationCandidate } from "@/lib/normalization-candidate";
 import type {
   GenerateScheduleResponse,
   RequestOutcome,
   ScheduleDataset,
   ScheduleVersion,
-  ShiftCode,
   WorkflowStep,
 } from "@/lib/types";
 import { formatDateTime, formatPercent, getDates } from "@/lib/utils";
@@ -165,29 +169,41 @@ async function enrichAmbiguousRequests(dataset: ScheduleDataset) {
       return payload.candidates;
     }),
   );
-  const validShifts = new Set<ShiftCode>(["D", "N", "OFF", "VAC", "ED"]);
   const candidates = new Map(
     responses.flat().filter(isRecord).map((candidate) => [candidate.id, candidate]),
+  );
+  const skillByNurseId = new Map(
+    dataset.nurses.map((nurse) => [nurse.id, nurse.skillLevel]),
   );
   const requests = dataset.requests.map((request) => {
     const candidate = candidates.get(`${request.nurseId}:${request.date}`);
     if (!candidate) return request;
-    const allowedAssignments = Array.isArray(candidate.allowedAssignments)
-      ? candidate.allowedAssignments.filter(
-          (shift): shift is ShiftCode =>
-            typeof shift === "string" && validShifts.has(shift as ShiftCode),
-        )
-      : [];
+    const allowedAssignments = assignmentsForNormalizationCandidate(
+      candidate,
+      request.allowedAssignments,
+    );
     const priority =
       typeof candidate.priority === "number" && candidate.priority >= 1 && candidate.priority <= 4
         ? (candidate.priority as 1 | 2 | 3 | 4)
         : request.priority;
+    const candidateType = candidate.normalizedType;
+    const normalizedType =
+      candidateType === "VACATION" || candidateType === "EDUCATION"
+        ? candidateType
+        : request.normalizedType;
+    const skillLevel = skillByNurseId.get(request.nurseId);
     return {
       ...request,
-      allowedAssignments: allowedAssignments.length
-        ? allowedAssignments
-        : request.allowedAssignments,
+      normalizedType,
+      allowedAssignments,
       priority,
+      constraintMode: skillLevel
+        ? constraintModeForNormalizedType(
+            normalizedType,
+            skillLevel,
+            request.constraintMode,
+          )
+        : request.constraintMode,
       confidence:
         typeof candidate.confidence === "number" ? candidate.confidence : request.confidence,
       requiresReview: true,
@@ -285,9 +301,22 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const workingDataset = stagedDataset ?? response.dataset;
   const hasPendingDataset = stagedDataset !== null;
   const reviewRequests = workingDataset.requests.filter((request) => request.requiresReview);
+  const lockedRequests = workingDataset.requests.filter(
+    (request) => request.constraintMode === "LOCKED",
+  );
+  const requiredChoices = workingDataset.requests.filter(
+    (request) => request.constraintMode === "REQUIRED",
+  );
+  const softRequests = workingDataset.requests.filter(
+    (request) =>
+      request.constraintMode === "PREFERENCE" && request.normalizedType !== "AVAILABLE",
+  );
   const activeStepIndex = WORKFLOW_STEPS.findIndex((step) => step.id === activeStep);
   const selectedOutcome = activeVersion ? getOutcome(activeVersion, selected) : undefined;
-  const rejectedOutcomes = activeVersion?.requestOutcomes.filter((outcome) => !outcome.satisfied) ?? [];
+  const rejectedOutcomes =
+    activeVersion?.requestOutcomes.filter(
+      (outcome) => outcome.constraintMode === "PREFERENCE" && !outcome.satisfied,
+    ) ?? [];
   const isDemoSnapshot = activeVersion?.solverStatus === "DEMO";
   const confirmationEligibility = getConfirmationEligibility(activeVersion);
   const confirmationGate = getConfirmationGatePresentation(activeVersion);
@@ -307,6 +336,9 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const canConfirmActiveVersion = !hasPendingDataset && confirmationEligibility.eligible;
   const selectedVersionBlockReason = displayedConfirmationGate.disabledReason;
   const displayedValidations = hasPendingDataset ? [] : confirmationEligibility.validations;
+  const firstBlockingDetail = displayedValidations.find(
+    (validation) => validation.status === "FAIL" && validation.details.length > 0,
+  )?.details[0];
   const trustedVersionCount = hasPendingDataset
     ? 0
     : response.versions.filter(
@@ -490,8 +522,14 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       setResolvedReviewCount(0);
       setActiveStep("review");
       setConnectionMode("live");
+      const lockedCount = normalized.dataset.requests.filter(
+        (request) => request.constraintMode === "LOCKED",
+      ).length;
+      const requiredCount = normalized.dataset.requests.filter(
+        (request) => request.constraintMode === "REQUIRED",
+      ).length;
       setNotice(
-        `${normalized.dataset.nurses.length} nickname-only records imported. ${normalized.dataset.requests.filter((request) => request.requiresReview).length} values require review${normalized.provider === "openai" ? " with OpenAI suggestions" : ""}.${normalizationWarning}`,
+        `${normalized.dataset.nurses.length} nickname-only records imported. ${lockedCount} fixed VAC/ED events and ${requiredCount} required choices were identified. ${normalized.dataset.requests.filter((request) => request.requiresReview).length} values require review${normalized.provider === "openai" ? " with OpenAI suggestions" : ""}.${normalizationWarning}`,
       );
     } catch (error) {
       setConnectionMode("error");
@@ -504,7 +542,9 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const handleResolveAll = () => {
     setResolvedReviewCount(reviewRequests.length);
     setActiveStep("generate");
-    setNotice(`${reviewRequests.length} ambiguous values resolved. The dataset is ready to optimize.`);
+    setNotice(
+      `${reviewRequests.length} ambiguous values resolved. ${lockedRequests.length} fixed events and ${requiredChoices.length} required choices will be enforced during optimization.`,
+    );
   };
 
   const handleGenerate = async () => {
@@ -539,8 +579,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       setNotice(
         parsed.mode === "solver"
           ? trustedCount > 0
-            ? `Optimization complete. ${trustedCount} of ${parsed.versions.length} candidate schedules passed every hard rule and are ready for admin review. Nurse requests are preferences, so unmet requests remain visible.`
-            : "Optimization finished, but no safe roster was produced. Nurse requests may be unmet, but every staffing and safety rule must pass before a version can be chosen."
+            ? `Optimization complete. ${trustedCount} of ${parsed.versions.length} candidate schedules passed every hard rule and are ready for admin review. Fixed VAC/ED events and required choices are mandatory; unmet soft requests remain visible.`
+            : "Optimization finished, but no safe roster was produced. Soft requests may be unmet, but fixed VAC/ED events, required choices, staffing, and safety rules must pass before a version can be chosen."
           : "A precomputed showcase response was loaded. It is labelled DEMO until fresh solver output is available.",
       );
     } catch (error) {
@@ -881,21 +921,36 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="dock-copy">
               <p className="eyebrow">02 / Review</p>
               <h2 id="action-dock-title">Resolve {reviewRequests.length} ambiguous values</h2>
-              <p>Raw values stay visible beside the suggested normalized meaning.</p>
+              <p>Confirm token meanings before optimization. Mandatory events and choices cannot be traded away.</p>
             </div>
-            <div className="review-preview">
-              {reviewRequests.map((request) => (
-                <div key={`${request.nurseId}:${request.date}`}>
-                  <span>{reviewNurseById.get(request.nurseId)?.nickname ?? "Nickname"}</span>
-                  <strong>{request.rawValue}</strong>
-                  <small>
-                    {Math.round(request.confidence * 100)}% confidence | {request.allowedAssignments.join(" / ")}
-                  </small>
+            <div className="review-stack">
+              <div className="request-policy-summary" aria-label="Imported request policy summary">
+                <span><strong>{lockedRequests.length}</strong><small>Fixed VAC / ED</small></span>
+                <span><strong>{requiredChoices.length}</strong><small>Required O/D or O/N</small></span>
+                <span><strong>{softRequests.length}</strong><small>Soft requests</small></span>
+              </div>
+              {reviewRequests.length ? (
+                <div className="review-preview">
+                  {reviewRequests.map((request) => (
+                    <div key={`${request.nurseId}:${request.date}`}>
+                      <span>{reviewNurseById.get(request.nurseId)?.nickname ?? "Nickname"}</span>
+                      <strong>{request.rawValue}</strong>
+                      <small>
+                        {Math.round(request.confidence * 100)}% confidence | {request.allowedAssignments.join(" / ")} | {requestPolicyLabel(request.constraintMode)}
+                      </small>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p className="review-clear">All request values use the approved vocabulary.</p>
+              )}
             </div>
             <button className="button button--primary" type="button" onClick={handleResolveAll}>
-              {resolvedReviewCount === reviewRequests.length ? "Mappings accepted" : "Accept suggestions"}
+              {reviewRequests.length === 0
+                ? "Continue to generate"
+                : resolvedReviewCount === reviewRequests.length
+                  ? "Mappings accepted"
+                  : "Accept suggestions"}
             </button>
           </>
         ) : null}
@@ -930,13 +985,23 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               <h2 id="action-dock-title">Version {activeVersion.versionNo}: {activeVersion.name}</h2>
               <p>
                 {hasTrustedSchedule
-                  ? "Compare request satisfaction and workload trade-offs. Unmet requests are expected when safety or coverage takes priority."
+                  ? "Compare soft-request satisfaction and workload trade-offs. Fixed VAC/ED events and required choices already passed as mandatory evidence."
                   : "This result cannot be used as a roster. Review the failed or missing hard-rule evidence, adjust the inputs, and generate again."}
               </p>
             </div>
-            <div className="compare-callout">
-              <strong>{hasTrustedSchedule ? formatPercent(activeVersion.metrics.requestSatisfactionRate) : "—"}</strong>
-              <span>{hasTrustedSchedule ? "Requests fulfilled" : "Request metrics unavailable"}</span>
+            <div className={`compare-callout${firstBlockingDetail ? " is-conflict" : ""}`}>
+              <strong>
+                {hasTrustedSchedule
+                  ? formatPercent(activeVersion.metrics.requestSatisfactionRate)
+                  : firstBlockingDetail
+                    ? "Action required"
+                    : "—"}
+              </strong>
+              <span>
+                {hasTrustedSchedule
+                  ? "Soft requests fulfilled"
+                  : firstBlockingDetail ?? "Request metrics unavailable"}
+              </span>
             </div>
             <button
               className="button button--primary"
@@ -1009,7 +1074,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <small>{hardRuleStateLabel}</small>
         </div>
         <div>
-          <span>Requests met</span>
+          <span>Soft requests met</span>
           <strong>{hasTrustedSchedule ? formatPercent(activeVersion.metrics.requestSatisfactionRate) : "—"}</strong>
           <small>{hasTrustedSchedule ? `OFF ${formatPercent(activeVersion.metrics.offSatisfactionRate)} · O1 ${formatPercent(activeVersion.metrics.o1SatisfactionRate)}` : "Unavailable"}</small>
         </div>
@@ -1024,9 +1089,25 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <small>{hasTrustedSchedule ? "Clinical shifts" : "Unavailable"}</small>
         </div>
         <div>
-          <span>Version state</span>
-          <strong>{hasPendingDataset ? "PENDING" : activeVersion.status}</strong>
-          <small>{hasPendingDataset ? "NOT GENERATED" : activeVersion.solverStatus}</small>
+          <span>Mandatory inputs</span>
+          <strong>
+            {hasPendingDataset
+              ? `${lockedRequests.length} fixed`
+              : hasTrustedSchedule
+                ? activeVersion.metrics.lockedRequirementsTotal
+                  ? `${activeVersion.metrics.lockedRequirementsPassed}/${activeVersion.metrics.lockedRequirementsTotal} fixed`
+                  : "No fixed events"
+                : "—"}
+          </strong>
+          <small>
+            {hasPendingDataset
+              ? `${requiredChoices.length} required choices · awaiting generation`
+              : hasTrustedSchedule
+                ? activeVersion.metrics.requiredChoicesTotal
+                  ? `${activeVersion.metrics.requiredChoicesPassed}/${activeVersion.metrics.requiredChoicesTotal} required choices`
+                  : "No required choices"
+                : "Unavailable"}
+          </small>
         </div>
       </section>
 
@@ -1051,6 +1132,10 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 {(["D", "N", "OFF", "VAC", "ED"] as const).map((shift) => (
                   <span key={shift}><i className={`legend-${shift.toLowerCase()}`} />{shift}</span>
                 ))}
+              </div>
+              <div className="constraint-legend" aria-label="Request policy legend">
+                <span><i className="constraint-key constraint-key--locked">F</i> Fixed VAC/ED</span>
+                <span><i className="constraint-key constraint-key--required">R</i> Required choice</span>
               </div>
               <div className="date-window" aria-label="Visible schedule dates">
                 {DATE_WINDOWS.map((window) => (
@@ -1118,20 +1203,32 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 </div>
 
                 {selectedOutcome ? (
-                  <div className="request-evidence">
-                    <div>
-                      <span>Requested</span>
-                      <strong>{selectedOutcome.requested}</strong>
+                  <>
+                    <div className={`request-policy-callout is-${selectedOutcome.constraintMode.toLowerCase()}`}>
+                      <strong>{requestPolicyLabel(selectedOutcome.constraintMode)}</strong>
+                      <span>
+                        {selectedOutcome.constraintMode === "LOCKED"
+                          ? "Approved VAC/ED must match exactly."
+                          : selectedOutcome.constraintMode === "REQUIRED"
+                            ? "The assignment must stay inside the allowed choice set."
+                            : "May yield only after mandatory and safety rules."}
+                      </span>
                     </div>
-                    <div>
-                      <span>Assigned</span>
-                      <strong>{SHIFT_LABELS[selectedOutcome.assigned]}</strong>
+                    <div className="request-evidence">
+                      <div>
+                        <span>Requested</span>
+                        <strong>{selectedOutcome.requested}</strong>
+                      </div>
+                      <div>
+                        <span>Assigned</span>
+                        <strong>{SHIFT_LABELS[selectedOutcome.assigned]}</strong>
+                      </div>
+                      <div>
+                        <span>Priority</span>
+                        <strong>{selectedOutcome.priority ?? "-"}</strong>
+                      </div>
                     </div>
-                    <div>
-                      <span>Priority</span>
-                      <strong>{selectedOutcome.priority ?? "-"}</strong>
-                    </div>
-                  </div>
+                  </>
                 ) : (
                   <p className="muted-copy">No exception is attached to this assignment.</p>
                 )}
@@ -1144,10 +1241,21 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <button
                   className="text-button text-button--accent"
                   type="button"
-                  disabled={!selectedOutcome || busyAction === "explain"}
+                  disabled={
+                    !selectedOutcome ||
+                    selectedOutcome.satisfied ||
+                    selectedOutcome.constraintMode !== "PREFERENCE" ||
+                    busyAction === "explain"
+                  }
                   onClick={() => void handleExplain()}
                 >
-                  {busyAction === "explain" ? "Checking evidence..." : "Explain with AI evidence"}
+                  {busyAction === "explain"
+                    ? "Checking evidence..."
+                    : selectedOutcome?.constraintMode !== "PREFERENCE"
+                      ? "Mandatory evidence shown"
+                      : selectedOutcome?.satisfied
+                        ? "Soft request fulfilled"
+                        : "Explain with AI evidence"}
                 </button>
               </>
             ) : (
@@ -1163,13 +1271,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="rail-heading">
               <div>
                 <p className="eyebrow">Needs explanation</p>
-                <h3>Unfulfilled requests</h3>
+                <h3>Unfulfilled soft requests</h3>
               </div>
               <span>{hasTrustedSchedule ? rejectedOutcomes.length : "—"}</span>
             </div>
             {!hasTrustedSchedule ? (
               <p className="muted-copy">
-                Request trade-offs are shown only after every hard staffing and safety rule passes.
+                Soft-request trade-offs are shown only after fixed events, required choices, staffing, and safety rules pass.
               </p>
             ) : rejectedOutcomes.length ? (
               rejectedOutcomes.map((outcome) => {
@@ -1211,7 +1319,18 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                     <i aria-hidden="true" />
                     <span>
                       <strong>{validation.name}</strong>
-                      <small>{validation.violationCount} violations</small>
+                      {validation.status === "FAIL" && validation.details.length ? (
+                        <span className="validation-detail">
+                          {validation.details.slice(0, 3).map((detail) => (
+                            <small key={detail}>{detail}</small>
+                          ))}
+                          {validation.details.length > 3 ? (
+                            <small>+{validation.details.length - 3} more conflicts</small>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <small>{validation.violationCount} violations</small>
+                      )}
                     </span>
                     <b>{validation.status}</b>
                   </li>
@@ -1238,8 +1357,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             {hasPendingDataset
               ? "The versions below belong to the previous dataset and cannot be chosen, confirmed, or exported. Generate new candidates after review."
               : trustedVersionCount > 0
-              ? `${trustedVersionCount} of ${response.versions.length} candidates pass every hard rule. Nurse requests remain preferences, and unmet requests stay visible for admin review.`
-              : "None of the candidates passed every hard rule. Unmet nurse requests can be accepted, but staffing and safety rules cannot; adjust the inputs and generate again."}
+              ? `${trustedVersionCount} of ${response.versions.length} candidates pass every hard rule. Fixed events and required choices are enforced; unmet soft requests stay visible for admin review.`
+              : "None of the candidates passed every hard rule. Unmet soft requests can be accepted, but fixed events, required choices, staffing, and safety rules cannot; adjust the inputs and generate again."}
           </p>
         </div>
         <div className="version-rows">
@@ -1265,7 +1384,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                     {isTrustedVersion ? ` / score ${version.objectiveScore?.toLocaleString() ?? "-"}` : ""}
                   </small>
                 </span>
-                <span><small>Requests met</small><strong>{isTrustedVersion ? formatPercent(version.metrics.requestSatisfactionRate) : "—"}</strong></span>
+                <span><small>Soft requests</small><strong>{isTrustedVersion ? formatPercent(version.metrics.requestSatisfactionRate) : "—"}</strong></span>
                 <span><small>Day balance</small><strong>{isTrustedVersion ? formatPercent(version.metrics.dayBalanceScore) : "—"}</strong></span>
                 <span><small>Night balance</small><strong>{isTrustedVersion ? formatPercent(version.metrics.nightBalanceScore) : "—"}</strong></span>
                 <span><small>Member L0</small><strong>{isTrustedVersion ? version.metrics.memberL0Usage : "—"}</strong></span>

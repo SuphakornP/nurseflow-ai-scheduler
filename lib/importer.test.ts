@@ -53,18 +53,35 @@ async function workbookBytes(includeIdentityColumn = false) {
 }
 
 const LIVE_SHEET_STAFF = [
-  { employeeCode: 900001, nickname: "Mint", level: "Incharge" },
-  { employeeCode: 900002, nickname: "Beam", level: "Trainee Inc." },
-  { employeeCode: 900003, nickname: "Fern", level: "Member L.1" },
-  { employeeCode: 900004, nickname: "Pond", level: "Member L.2" },
-  { employeeCode: 900005, nickname: "Sky", level: "Member L.0" },
-] as const;
+  ...Array.from({ length: 8 }, (_, index) => ({
+    employeeCode: 900001 + index,
+    nickname: `IC${index + 1}`,
+    level: "Incharge",
+  })),
+  ...Array.from({ length: 4 }, (_, index) => ({
+    employeeCode: 900101 + index,
+    nickname: `TR${index + 1}`,
+    level: "Trainee Inc.",
+  })),
+  ...Array.from({ length: 11 }, (_, index) => ({
+    employeeCode: 900201 + index,
+    nickname: `L1${index + 1}`,
+    level: "Member L.1",
+  })),
+  ...Array.from({ length: 4 }, (_, index) => ({
+    employeeCode: 900301 + index,
+    nickname: `L2${index + 1}`,
+    level: "Member L.2",
+  })),
+  { employeeCode: 900401, nickname: "L0A", level: "Member L.0" },
+];
 
 async function liveGoogleSheetBytes(
   employeeCodes: readonly (string | number)[] = LIVE_SHEET_STAFF.map(
     (staff) => staff.employeeCode,
   ),
   nicknames: readonly string[] = LIVE_SHEET_STAFF.map((staff) => staff.nickname),
+  levels: readonly string[] = LIVE_SHEET_STAFF.map((staff) => staff.level),
 ) {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("ชีต 1");
@@ -124,10 +141,15 @@ async function liveGoogleSheetBytes(
     if (index === 0) {
       monthlyRequests.splice(0, 4, "D/N", "D1", "O1/N", "VAC1");
     }
+    if (index === 1) monthlyRequests[13] = "VAC";
+    if (index === 8) monthlyRequests[14] = "ED";
+    if (index === 12) monthlyRequests[15] = "O/D";
+    if (index === 23) monthlyRequests[16] = "O/N";
+    if (index === LIVE_SHEET_STAFF.length - 1) monthlyRequests[17] = "ED";
     sheet.addRow([
       employeeCodes[index] ?? "",
       nicknames[index] ?? staff.nickname,
-      staff.level,
+      levels[index] ?? staff.level,
       "D",
       "N",
       "O",
@@ -172,24 +194,46 @@ describe("parseWorkbook", () => {
     );
 
     expect(dataset.privacyMode).toBe("NICKNAME_ONLY");
-    expect(dataset.nurses).toHaveLength(5);
-    expect(dataset.nurses.map(({ nickname, skillLevel }) => ({ nickname, skillLevel }))).toEqual([
-      { nickname: "Mint", skillLevel: "INCHARGE" },
-      { nickname: "Beam", skillLevel: "TRAINEE_INC" },
-      { nickname: "Fern", skillLevel: "MEMBER_L1" },
-      { nickname: "Pond", skillLevel: "MEMBER_L2" },
-      { nickname: "Sky", skillLevel: "MEMBER_L0" },
-    ]);
-    expect(dataset.previousAssignments).toHaveLength(15);
+    expect(dataset.nurses).toHaveLength(28);
+    expect(
+      Object.fromEntries(
+        ["INCHARGE", "TRAINEE_INC", "MEMBER_L1", "MEMBER_L2", "MEMBER_L0"].map(
+          (skillLevel) => [
+            skillLevel,
+            dataset.nurses.filter((nurse) => nurse.skillLevel === skillLevel).length,
+          ],
+        ),
+      ),
+    ).toEqual({ INCHARGE: 8, TRAINEE_INC: 4, MEMBER_L1: 11, MEMBER_L2: 4, MEMBER_L0: 1 });
+    expect(dataset.previousAssignments).toHaveLength(84);
     expect(dataset.previousAssignments.slice(0, 3)).toMatchObject([
       { date: "2026-07-29", shift: "D" },
       { date: "2026-07-30", shift: "N" },
       { date: "2026-07-31", shift: "OFF" },
     ]);
-    expect(dataset.requests).toHaveLength(155);
-    expect(dataset.requests.every((request) => request.constraintMode === "PREFERENCE")).toBe(
-      true,
-    );
+    expect(dataset.requests).toHaveLength(868);
+    const nurseById = new Map(dataset.nurses.map((nurse) => [nurse.id, nurse]));
+    const vacation = dataset.requests.find((request) => request.rawValue === "VAC");
+    const education = dataset.requests.filter((request) => request.rawValue === "ED");
+    expect(vacation).toMatchObject({ normalizedType: "VACATION", constraintMode: "LOCKED" });
+    expect(education).toHaveLength(2);
+    expect(
+      education.map((request) => ({
+        skillLevel: nurseById.get(request.nurseId)?.skillLevel,
+        mode: request.constraintMode,
+      })),
+    ).toEqual([
+      { skillLevel: "TRAINEE_INC", mode: "LOCKED" },
+      { skillLevel: "MEMBER_L0", mode: "PREFERENCE" },
+    ]);
+    expect(dataset.requests.find((request) => request.rawValue === "O/D")).toMatchObject({
+      normalizedType: "OFF_OR_DAY",
+      constraintMode: "REQUIRED",
+    });
+    expect(dataset.requests.find((request) => request.rawValue === "O/N")).toMatchObject({
+      normalizedType: "OFF_OR_NIGHT",
+      constraintMode: "REQUIRED",
+    });
 
     const serialized = JSON.stringify(dataset);
     for (const staff of LIVE_SHEET_STAFF) {
@@ -235,6 +279,19 @@ describe("parseWorkbook", () => {
     ).rejects.toThrow("single nickname or pseudonym");
   });
 
+  it("rejects a legacy MICU roster with the wrong exact skill composition", async () => {
+    const levels = LIVE_SHEET_STAFF.map((staff) => staff.level);
+    levels[0] = "Member L.1";
+
+    await expect(
+      parseWorkbook(
+        await liveGoogleSheetBytes(undefined, undefined, levels),
+        period,
+        "wrong-composition.xlsx",
+      ),
+    ).rejects.toThrow("requires exactly 28 nurses");
+  });
+
   it("keeps non-standard live request tokens reviewable", async () => {
     const dataset = await parseWorkbook(
       await liveGoogleSheetBytes(),
@@ -250,6 +307,7 @@ describe("parseWorkbook", () => {
     expect(requestByRawValue.get("D/N")).toMatchObject({
       normalizedType: "AMBIGUOUS",
       allowedAssignments: ["D", "N", "OFF"],
+      constraintMode: "PREFERENCE",
       requiresReview: true,
     });
     expect(requestByRawValue.get("D1")).toMatchObject({

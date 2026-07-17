@@ -554,9 +554,59 @@ button:disabled {
   opacity: 0;
 }
 
+.review-stack {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.request-policy-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(90px, 1fr));
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 42%);
+}
+
+.request-policy-summary > span {
+  min-height: 44px;
+  display: grid;
+  align-content: center;
+  padding: 7px 10px;
+  border-right: 1px solid var(--line);
+}
+
+.request-policy-summary > span:last-child {
+  border-right: 0;
+}
+
+.request-policy-summary strong,
+.request-policy-summary small {
+  display: block;
+}
+
+.request-policy-summary strong {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.request-policy-summary small,
+.review-clear {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.review-clear {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-wash);
+}
+
 .review-preview {
   display: grid;
   grid-template-columns: repeat(4, minmax(112px, 1fr));
+  max-height: 126px;
+  overflow: auto;
   border-left: 1px solid var(--line);
 }
 
@@ -613,6 +663,28 @@ button:disabled {
 .compare-callout span {
   color: var(--muted);
   font-size: 10px;
+}
+
+.compare-callout.is-conflict {
+  gap: 5px;
+  max-width: 650px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--danger);
+  background: #f5dfdc;
+}
+
+.compare-callout.is-conflict strong {
+  color: var(--danger);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.compare-callout.is-conflict span {
+  color: var(--ink);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .confirmation-gate {
@@ -751,13 +823,15 @@ button:disabled {
 }
 
 .shift-legend,
+.constraint-legend,
 .date-window {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.shift-legend span {
+.shift-legend span,
+.constraint-legend span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -771,6 +845,30 @@ button:disabled {
   height: 8px;
   border: 1px solid rgb(17 36 30 / 12%);
   border-radius: 2px;
+}
+
+.constraint-key {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.constraint-key--locked {
+  border: 1px solid #07705f;
+  background: #dff3ea;
+  color: #075c50;
+}
+
+.constraint-key--required {
+  border: 1px dashed #294c70;
+  background: #e9f0f7;
+  color: #173b5d;
 }
 
 .legend-d { background: var(--day); }
@@ -973,6 +1071,32 @@ button:disabled {
   background: var(--accent);
 }
 
+.constraint-marker {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 11px;
+  height: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--paper);
+  border-radius: 3px;
+  font-size: 6px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.constraint-marker--locked {
+  background: #087a66;
+  color: white;
+}
+
+.constraint-marker--required {
+  background: #284e73;
+  color: white;
+}
+
 .surface-footer {
   min-height: 37px;
   display: flex;
@@ -1043,6 +1167,35 @@ button:disabled {
   grid-template-columns: repeat(3, 1fr);
   margin: 17px 0;
   border-block: 1px solid var(--line);
+}
+
+.request-policy-callout {
+  display: grid;
+  gap: 2px;
+  margin: 14px 0 -8px;
+  padding: 9px 10px;
+  border-left: 3px solid var(--line-strong);
+  background: rgb(255 255 255 / 54%);
+}
+
+.request-policy-callout strong {
+  font-size: 10px;
+}
+
+.request-policy-callout span {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.request-policy-callout.is-locked {
+  border-left-color: #087a66;
+  background: #e6f5ef;
+}
+
+.request-policy-callout.is-required {
+  border-left-color: #284e73;
+  background: #edf3f8;
 }
 
 .request-evidence > div {
@@ -1217,6 +1370,19 @@ button:disabled {
 .validation-list li small {
   color: var(--muted);
   font-size: 8px;
+}
+
+.validation-list .validation-detail {
+  display: grid;
+  gap: 3px;
+  padding: 2px 0 7px;
+}
+
+.validation-list .validation-detail small {
+  overflow: visible;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .validation-list li > b {

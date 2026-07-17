@@ -74,12 +74,44 @@ describe("schedule dataset schema", () => {
     expect(ScheduleDatasetSchema.safeParse(input).success).toBe(false);
   });
 
-  it("rejects an unknown request constraint mode", () => {
+  it("accepts REQUIRED only for a required choice set", () => {
     const input = {
       ...dataset(),
-      requests: [{ ...dataset().requests[0], constraintMode: "REQUIRED" }],
+      requests: [{
+        ...dataset().requests[0],
+        rawValue: "O/D",
+        normalizedType: "OFF_OR_DAY" as const,
+        allowedAssignments: ["OFF" as const, "D" as const],
+        constraintMode: "REQUIRED" as const,
+      }],
     };
 
-    expect(ScheduleDatasetSchema.safeParse(input).success).toBe(false);
+    expect(ScheduleDatasetSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("rejects missing, unknown, or semantically relaxed request modes", () => {
+    const missing = dataset();
+    const requestWithoutMode = { ...missing.requests[0] } as Record<string, unknown>;
+    delete requestWithoutMode.constraintMode;
+    missing.requests = [requestWithoutMode as never];
+
+    const unknown = {
+      ...dataset(),
+      requests: [{ ...dataset().requests[0], constraintMode: "OPTIONAL" }],
+    };
+    const relaxedVacation = {
+      ...dataset(),
+      requests: [{
+        ...dataset().requests[0],
+        rawValue: "VAC",
+        normalizedType: "VACATION",
+        allowedAssignments: ["VAC"],
+        constraintMode: "PREFERENCE",
+      }],
+    };
+
+    expect(ScheduleDatasetSchema.safeParse(missing).success).toBe(false);
+    expect(ScheduleDatasetSchema.safeParse(unknown).success).toBe(false);
+    expect(ScheduleDatasetSchema.safeParse(relaxedVacation).success).toBe(false);
   });
 });

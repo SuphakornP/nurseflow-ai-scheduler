@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 
 import { SHIFT_LABELS, SKILL_LABELS } from "@/lib/constants";
+import { requestPolicyLabel } from "@/lib/request-semantics";
 import type { Nurse, ScheduleVersion, ShiftCode } from "@/lib/types";
 import { getDates } from "@/lib/utils";
 
@@ -78,6 +79,16 @@ export function ScheduleMatrix({
       ),
     [baselineVersion],
   );
+  const outcomeMap = useMemo(
+    () =>
+      new Map(
+        version.requestOutcomes.map((outcome) => [
+          assignmentKey(outcome.nurseId, outcome.date),
+          outcome,
+        ]),
+      ),
+    [version.requestOutcomes],
+  );
 
   const dates = getDates("2026-08-01", "2026-08-31");
   const [rangeStart, rangeEnd] = WINDOW_RANGES[dateWindow];
@@ -128,6 +139,7 @@ export function ScheduleMatrix({
                 const key = assignmentKey(nurse.id, date);
                 const shift = assignmentMap.get(key) ?? "OFF";
                 const baselineShift = baselineMap.get(key);
+                const outcome = outcomeMap.get(key);
                 const changed = Boolean(baselineShift && baselineShift !== shift);
                 const isSelected =
                   selected?.nurse.id === nurse.id && selected.date === date;
@@ -136,18 +148,33 @@ export function ScheduleMatrix({
                     <button
                       className={`shift-token shift-token--${shift.toLowerCase()}${
                         isSelected ? " is-selected" : ""
-                      }${changed ? " is-changed" : ""}`}
+                      }${changed ? " is-changed" : ""}${
+                        outcome?.constraintMode === "LOCKED"
+                          ? " is-locked"
+                          : outcome?.constraintMode === "REQUIRED"
+                            ? " is-required"
+                            : ""
+                      }`}
                       type="button"
                       title={`${nurse.nickname}, ${date}: ${SHIFT_LABELS[shift]}${
+                        outcome ? `; ${requestPolicyLabel(outcome.constraintMode)}` : ""
+                      }${
                         changed ? ` (changed from ${SHIFT_LABELS[baselineShift!]})` : ""
                       }`}
                       aria-label={`${nurse.nickname}, ${date}, ${SHIFT_LABELS[shift]}${
+                        outcome ? `, ${requestPolicyLabel(outcome.constraintMode)}` : ""
+                      }${
                         changed ? `, changed from ${SHIFT_LABELS[baselineShift!]}` : ""
                       }`}
                       aria-pressed={isSelected}
                       onClick={() => onSelect({ nurse, date, shift })}
                     >
                       {shift}
+                      {outcome?.constraintMode === "LOCKED" ? (
+                        <span className="constraint-marker constraint-marker--locked" aria-hidden="true">F</span>
+                      ) : outcome?.constraintMode === "REQUIRED" ? (
+                        <span className="constraint-marker constraint-marker--required" aria-hidden="true">R</span>
+                      ) : null}
                       {changed ? <span className="change-dot" aria-hidden="true" /> : null}
                     </button>
                   </td>

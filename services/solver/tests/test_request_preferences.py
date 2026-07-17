@@ -18,7 +18,7 @@ from app.models import (
     ShiftCode,
     SkillLevel,
 )
-from app.solver import generate_schedule
+from app.solver import InputProblemError, generate_schedule
 from app.validation import validate_schedule
 
 from conftest import make_assignments
@@ -115,7 +115,42 @@ def test_requests_first_freezes_overall_preference_satisfaction(
 
 
 @pytest.mark.parametrize("requested", [ShiftCode.VACATION, ShiftCode.EDUCATION])
-def test_vacation_and_education_preferences_are_selectable_without_being_locks(
+def test_approved_vacation_and_education_are_immutable_and_count_eight_hours(
+    requested: ShiftCode,
+    request_nurses,
+    permissive_skill_ranges,
+) -> None:
+    problem = _problem_with_requests(
+        request_nurses,
+        permissive_skill_ranges,
+        [
+            _request(
+                "A",
+                requested.value,
+                mode=RequestConstraintMode.LOCKED,
+            )
+        ],
+    )
+
+    result = generate_schedule(problem)
+    assigned = next(item for item in result.assignments if item.nurse_id == "A")
+
+    assert result.status in {"OPTIMAL", "FEASIBLE"}
+    assert assigned.shift == requested
+    assert next(item for item in result.summaries if item.nurse_id == "A").total_hours == 8
+    assert result.validation is not None and result.validation.is_valid
+    evidence_code = (
+        "VACATION_PRESERVED"
+        if requested == ShiftCode.VACATION
+        else "EDUCATION_PRESERVED"
+    )
+    assert next(
+        item.status for item in result.validation.checks if item.code == evidence_code
+    ) == "PASS"
+
+
+@pytest.mark.parametrize("requested", [ShiftCode.VACATION, ShiftCode.EDUCATION])
+def test_unlocked_vacation_or_ordinary_education_is_rejected(
     requested: ShiftCode,
     request_nurses,
     permissive_skill_ranges,
@@ -126,12 +161,40 @@ def test_vacation_and_education_preferences_are_selectable_without_being_locks(
         [_request("A", requested.value)],
     )
 
+    with pytest.raises(InputProblemError):
+        generate_schedule(problem)
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "allowed"),
+    [
+        ("O/D", {ShiftCode.OFF, ShiftCode.DAY}),
+        ("O/N", {ShiftCode.OFF, ShiftCode.NIGHT}),
+    ],
+)
+def test_required_flexible_choices_never_leave_their_domain(
+    raw_value: str,
+    allowed: set[ShiftCode],
+    request_nurses,
+    permissive_skill_ranges,
+) -> None:
+    problem = _problem_with_requests(
+        request_nurses,
+        permissive_skill_ranges,
+        [_request("A", raw_value, mode=RequestConstraintMode.REQUIRED)],
+    )
+
     result = generate_schedule(problem)
     assigned = next(item for item in result.assignments if item.nurse_id == "A")
 
-    assert result.status in {"OPTIMAL", "FEASIBLE"}
-    assert assigned.shift == requested
-    assert result.metrics["REQUEST_SATISFIED_COUNT"] == 1
+    assert assigned.shift in allowed
+    assert result.validation is not None and result.validation.is_valid
+    required_check = next(
+        item
+        for item in result.validation.checks
+        if item.code == "REQUIRED_ASSIGNMENT_ALLOWED"
+    )
+    assert required_check.status == "PASS"
 
 
 def test_human_resolved_allowed_set_is_a_soft_preference(

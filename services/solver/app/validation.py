@@ -12,7 +12,13 @@ from .models import (
     ValidationCheck,
     ValidationReport,
 )
-from .normalization import NormalizationStatus, normalize_request
+from .normalization import (
+    NormalizationStatus,
+    RequestKind,
+    find_long_off_blocks,
+    normalize_request,
+    request_semantics_error,
+)
 
 
 def _check(code: str, name: str, details: list[str]) -> ValidationCheck:
@@ -137,27 +143,63 @@ def validate_schedule(
     locked_vacation_details: list[str] = []
     locked_education_details: list[str] = []
     locked_clinical_details: list[str] = []
+    required_assignment_details: list[str] = []
     flexible_details: list[str] = []
     normalization_details: list[str] = []
+    request_semantics_details: list[str] = []
+    off_priority_details: list[str] = []
+    prepared_requests = {}
     for request in problem.requests:
         normalized = normalize_request(request)
+        prepared_requests[(request.nurse_id, request.request_date)] = normalized
         if normalized.status == NormalizationStatus.NEEDS_REVIEW:
             normalization_details.append(
                 f"{request.nurse_id} {request.request_date}: '{request.raw_value}' unresolved"
             )
             continue
+        semantics_error = request_semantics_error(
+            normalized,
+            nurse_by_id[request.nurse_id].skill_level,
+        )
+        if semantics_error:
+            request_semantics_details.append(
+                f"{request.nurse_id} {request.request_date}: {semantics_error}"
+            )
+        if (
+            normalized.kind == RequestKind.OFF_REQUEST
+            and normalized.off_priority not in {1, 2, 3, 4}
+        ):
+            off_priority_details.append(
+                f"{request.nurse_id} {request.request_date}: missing O1-O4 priority"
+            )
         actual = assignment_map.get((request.nurse_id, request.request_date))
-        if normalized.locked_shift is not None and actual != normalized.locked_shift:
+        allowed = normalized.allowed_assignments or frozenset()
+        if allowed == frozenset({ShiftCode.VACATION}) and actual != ShiftCode.VACATION:
+            locked_vacation_details.append(
+                f"{request.nurse_id} {request.request_date}: expected VAC, "
+                f"got {actual.value if actual else 'MISSING'}"
+            )
+        elif normalized.locked_shift is not None and actual != normalized.locked_shift:
             detail = (
                 f"{request.nurse_id} {request.request_date}: expected "
                 f"{normalized.locked_shift.value}, got {actual.value if actual else 'MISSING'}"
             )
-            if normalized.locked_shift == ShiftCode.VACATION:
-                locked_vacation_details.append(detail)
-            elif normalized.locked_shift == ShiftCode.EDUCATION:
+            if normalized.locked_shift == ShiftCode.EDUCATION:
                 locked_education_details.append(detail)
             else:
                 locked_clinical_details.append(detail)
+        if (
+            normalized.constraint_mode == RequestConstraintMode.REQUIRED
+            and normalized.allowed_assignments is not None
+            and actual not in normalized.allowed_assignments
+        ):
+            allowed_text = ",".join(
+                sorted(item.value for item in normalized.allowed_assignments)
+            )
+            required_assignment_details.append(
+                f"{request.nurse_id} {request.request_date}: expected one of "
+                f"{allowed_text}, got {actual.value if actual else 'MISSING'}"
+            )
         if (
             normalized.constraint_mode == RequestConstraintMode.LOCKED
             and normalized.locked_shift is None
@@ -179,8 +221,18 @@ def validate_schedule(
                 normalization_details,
             ),
             _check(
+                "REQUEST_SEMANTICS",
+                "Request values use the required constraint mode",
+                request_semantics_details,
+            ),
+            _check(
+                "OFF_PRIORITY_NORMALIZED",
+                "OFF requests have an O1 through O4 priority",
+                off_priority_details,
+            ),
+            _check(
                 "VACATION_PRESERVED",
-                "Admin-approved Vacation locks are preserved",
+                "Approved Vacation is immutable",
                 locked_vacation_details,
             ),
             _check(
@@ -192,6 +244,11 @@ def validate_schedule(
                 "FIXED_CLINICAL_PRESERVED",
                 "Admin-approved Day and Night locks are preserved",
                 locked_clinical_details,
+            ),
+            _check(
+                "REQUIRED_ASSIGNMENT_ALLOWED",
+                "Required O/D and O/N choices stay inside their domain",
+                required_assignment_details,
             ),
             _check(
                 "FLEXIBLE_ASSIGNMENT_ALLOWED",
@@ -307,6 +364,7 @@ def validate_schedule(
     )
 
     l0_details: list[str] = []
+    l0_weekday_default_details: list[str] = []
     for nurse in problem.nurses:
         if nurse.skill_level != SkillLevel.MEMBER_L0:
             continue
@@ -320,11 +378,75 @@ def validate_schedule(
                 f"{nurse.id}: {clinical_count} clinical shifts exceeds "
                 f"{problem.rules.max_l0_clinical_shifts}"
             )
+        for assignment_date in dates:
+            if assignment_date.weekday() >= 5:
+                continue
+            actual = assignment_map.get((nurse.id, assignment_date))
+            if actual in {
+                ShiftCode.DAY,
+                ShiftCode.NIGHT,
+                ShiftCode.EDUCATION,
+            }:
+                continue
+            request = prepared_requests.get((nurse.id, assignment_date))
+            allowed = request.allowed_assignments if request else None
+            off_is_requested = bool(
+                request
+                and (
+                    request.kind == RequestKind.OFF_REQUEST
+                    or (
+                        request.constraint_mode
+                        in {RequestConstraintMode.LOCKED, RequestConstraintMode.REQUIRED}
+                        and allowed
+                        and ShiftCode.OFF in allowed
+                    )
+                )
+            )
+            vacation_is_locked = bool(
+                request
+                and request.constraint_mode == RequestConstraintMode.LOCKED
+                and allowed == frozenset({ShiftCode.VACATION})
+            )
+            if actual == ShiftCode.OFF and off_is_requested:
+                continue
+            if actual == ShiftCode.VACATION and vacation_is_locked:
+                continue
+            l0_weekday_default_details.append(
+                f"{nurse.id} {assignment_date}: expected D, N, ED, requested OFF, "
+                f"or locked VAC; got {actual.value if actual else 'MISSING'}"
+            )
+    checks.extend(
+        [
+            _check(
+                "MEMBER_L0_LIMIT",
+                "Member L0 monthly clinical shift limit",
+                l0_details,
+            ),
+            _check(
+                "MEMBER_L0_WEEKDAY_DEFAULT",
+                "Member L0 uses Education when not clinical on weekdays",
+                l0_weekday_default_details,
+            ),
+        ]
+    )
+
+    long_off_details: list[str] = []
+    for block in find_long_off_blocks(prepared_requests):
+        missed_off_dates = [
+            request_date
+            for request_date in block.off_dates
+            if assignment_map.get((block.nurse_id, request_date)) != ShiftCode.OFF
+        ]
+        if len(missed_off_dates) > 1:
+            long_off_details.append(
+                f"{block.nurse_id} {block.dates[0]} through {block.dates[-1]}: "
+                f"{len(missed_off_dates)} requested OFF days were changed"
+            )
     checks.append(
         _check(
-            "MEMBER_L0_LIMIT",
-            "Member L0 monthly clinical shift limit",
-            l0_details,
+            "LONG_OFF_BLOCK_PRESERVED",
+            "Long requested OFF/VAC blocks lose at most one OFF day",
+            long_off_details,
         )
     )
 

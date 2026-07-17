@@ -169,6 +169,10 @@ function makeMetrics(
     memberL0Usage,
     hardConstraintsPassed: VALIDATION_NAMES.length,
     hardConstraintsTotal: VALIDATION_NAMES.length,
+    lockedRequirementsPassed: 3,
+    lockedRequirementsTotal: 3,
+    requiredChoicesPassed: 0,
+    requiredChoicesTotal: 0,
   };
 }
 
@@ -184,6 +188,8 @@ function makeOutcomes(assignments: Assignment[], requestSpecs: RequestSpec[]): R
       nurseId: request.nurseId,
       date: request.date,
       requested: request.requested,
+      normalizedType: "OFF_REQUEST",
+      constraintMode: "PREFERENCE",
       assigned,
       priority: request.priority,
       satisfied,
@@ -206,6 +212,7 @@ function makeRequest(
     normalizedType: "OFF_REQUEST",
     priority: spec.priority,
     allowedAssignments: ["OFF"],
+    constraintMode: "PREFERENCE",
     confidence: 1,
     requiresReview: false,
     ...(assigned === "VAC" ? { normalizedType: "VACATION" as const } : {}),
@@ -246,6 +253,36 @@ export function createDemoResponse(): GenerateScheduleResponse {
     "ED",
     lockedNurseIds,
   );
+  const fixedSpecs: Array<{
+    nurseId: string;
+    date: string;
+    requested: string;
+    normalizedType: "VACATION" | "EDUCATION";
+    expected: "VAC" | "ED";
+  }> = [
+    { nurseId: vacationOne, date: "2026-08-09", requested: "Vac", normalizedType: "VACATION", expected: "VAC" },
+    { nurseId: vacationTwo, date: "2026-08-20", requested: "VAC", normalizedType: "VACATION", expected: "VAC" },
+    { nurseId: education, date: "2026-08-25", requested: "ED", normalizedType: "EDUCATION", expected: "ED" },
+  ];
+  const fixedOutcomes = (assignments: Assignment[]): RequestOutcome[] => fixedSpecs.map((spec) => {
+    const assigned = assignments.find(
+      (item) => item.nurseId === spec.nurseId && item.date === spec.date,
+    )?.shift ?? "OFF";
+    const satisfied = assigned === spec.expected;
+    return {
+      nurseId: spec.nurseId,
+      date: spec.date,
+      requested: spec.requested,
+      normalizedType: spec.normalizedType,
+      constraintMode: "LOCKED",
+      assigned,
+      satisfied,
+      reasonCode: satisfied ? undefined : "MANDATORY_EVENT_VIOLATION",
+      explanation: satisfied
+        ? `${spec.requested} is an approved fixed event and was preserved.`
+        : `${spec.requested} is mandatory and this candidate cannot be confirmed.`,
+    };
+  });
 
   const requestSpecs: RequestSpec[] = [
     {
@@ -367,7 +404,10 @@ export function createDemoResponse(): GenerateScheduleResponse {
     assignments: definition.assignments,
     validations,
     metrics: definition.metrics,
-    requestOutcomes: makeOutcomes(definition.assignments, requestSpecs),
+    requestOutcomes: [
+      ...makeOutcomes(definition.assignments, requestSpecs),
+      ...fixedOutcomes(definition.assignments),
+    ],
   }));
 
   const requestRows: ShiftRequest[] = [
@@ -378,6 +418,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "Vac",
       normalizedType: "VACATION",
       allowedAssignments: ["VAC"],
+      constraintMode: "LOCKED",
       confidence: 1,
       requiresReview: false,
     },
@@ -387,6 +428,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "VAC",
       normalizedType: "VACATION",
       allowedAssignments: ["VAC"],
+      constraintMode: "LOCKED",
       confidence: 1,
       requiresReview: false,
     },
@@ -396,6 +438,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "ED",
       normalizedType: "EDUCATION",
       allowedAssignments: ["ED"],
+      constraintMode: "LOCKED",
       confidence: 1,
       requiresReview: false,
     },
@@ -406,6 +449,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       normalizedType: "AMBIGUOUS",
       priority: 1,
       allowedAssignments: ["OFF", "N"],
+      constraintMode: "PREFERENCE",
       confidence: 0.68,
       requiresReview: true,
     },
@@ -415,6 +459,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "D/N",
       normalizedType: "AMBIGUOUS",
       allowedAssignments: ["D", "N"],
+      constraintMode: "PREFERENCE",
       confidence: 0.61,
       requiresReview: true,
     },
@@ -424,6 +469,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "Vac1",
       normalizedType: "AMBIGUOUS",
       allowedAssignments: ["VAC"],
+      constraintMode: "PREFERENCE",
       confidence: 0.54,
       requiresReview: true,
     },
@@ -433,6 +479,7 @@ export function createDemoResponse(): GenerateScheduleResponse {
       rawValue: "D1",
       normalizedType: "AMBIGUOUS",
       allowedAssignments: ["D"],
+      constraintMode: "PREFERENCE",
       confidence: 0.49,
       requiresReview: true,
     },
