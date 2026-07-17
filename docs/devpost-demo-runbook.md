@@ -54,17 +54,22 @@ NurseFlow turns a difficult spreadsheet workflow into a reviewable decision-supp
 
 ## Submission media
 
-Prepare these from a clean synthetic run and review them at full resolution before upload:
+The prepared 3:2 JPG assets below came from a clean synthetic run and were
+reviewed at full resolution. Devpost upload remains a manual owner action.
 
-| Asset | Suggested frame |
+| Asset | Prepared file |
 | --- | --- |
-| Thumbnail | Product name plus a clean schedule matrix; no credentials or row-level identities |
-| Screenshot 1 | Admin access checkpoint |
-| Screenshot 2 | Import and ambiguous-value review |
-| Screenshot 3 | Candidate comparison with hard validations visible |
-| Screenshot 4 | Confirmation/history or exported workbook summary |
+| Thumbnail candidate | [`04-candidate-comparison.jpg`](screenshots/04-candidate-comparison.jpg) |
+| Synthetic intake | [`01-synthetic-demo-import.jpg`](screenshots/01-synthetic-demo-import.jpg) |
+| Request-policy review | [`02-request-review.jpg`](screenshots/02-request-review.jpg) |
+| Candidate generation | [`03-candidate-generation.jpg`](screenshots/03-candidate-generation.jpg) |
+| Preserved-VAC evidence | [`05-roster-evidence.jpg`](screenshots/05-roster-evidence.jpg) |
+| Hard validation and profiles | [`06-hard-validation.jpg`](screenshots/06-hard-validation.jpg) |
+| Fail-closed confirmation/export | [`07-confirm-export.jpg`](screenshots/07-confirm-export.jpg) |
 
-Existing ignored mobile QA captures are not submission assets. Do not promote them without a new privacy review, and add final media to the repository only after confirming it contains synthetic data.
+For a compact Devpost set, use the thumbnail candidate plus synthetic intake,
+preserved-VAC evidence, hard validation, and confirmation/export. Existing
+ignored mobile QA captures are not submission assets.
 
 ## Final upload QA
 
