@@ -5,9 +5,6 @@ import { useMemo } from "react";
 import { SHIFT_LABELS, SKILL_LABELS } from "@/lib/constants";
 import { requestPolicyLabel } from "@/lib/request-semantics";
 import type { Nurse, ScheduleVersion, ShiftCode } from "@/lib/types";
-import { getDates } from "@/lib/utils";
-
-export type DateWindow = "month" | "week-1" | "week-2" | "week-3" | "week-4" | "week-5";
 
 export interface SelectedAssignment {
   nurse: Nurse;
@@ -19,19 +16,11 @@ interface ScheduleMatrixProps {
   nurses: Nurse[];
   version: ScheduleVersion;
   baselineVersion?: ScheduleVersion;
-  dateWindow: DateWindow;
+  dates: string[];
+  periodName: string;
   selected?: SelectedAssignment;
   onSelect: (assignment: SelectedAssignment) => void;
 }
-
-const WINDOW_RANGES: Record<DateWindow, [number, number]> = {
-  month: [1, 31],
-  "week-1": [1, 7],
-  "week-2": [8, 14],
-  "week-3": [15, 21],
-  "week-4": [22, 28],
-  "week-5": [29, 31],
-};
 
 function assignmentKey(nurseId: string, date: string) {
   return `${nurseId}:${date}`;
@@ -55,7 +44,8 @@ export function ScheduleMatrix({
   nurses,
   version,
   baselineVersion,
-  dateWindow,
+  dates,
+  periodName,
   selected,
   onSelect,
 }: ScheduleMatrixProps) {
@@ -90,12 +80,6 @@ export function ScheduleMatrix({
     [version.requestOutcomes],
   );
 
-  const dates = getDates("2026-08-01", "2026-08-31");
-  const [rangeStart, rangeEnd] = WINDOW_RANGES[dateWindow];
-  const visibleDates = dates.filter((date) => {
-    const day = Number(date.slice(-2));
-    return day >= rangeStart && day <= rangeEnd;
-  });
   const rosterDescription = nurses.every((nurse) => nurse.synthetic === true)
     ? "synthetic nickname-only staff records"
     : "nickname-only imported request records";
@@ -104,7 +88,7 @@ export function ScheduleMatrix({
     <div className="schedule-scroller" tabIndex={0} aria-label="Schedule matrix scroll area">
       <table className="schedule-table">
         <caption className="sr-only">
-          August 2026 nurse schedule for {nurses.length} {rosterDescription}.
+          {periodName} for {nurses.length} {rosterDescription}.
         </caption>
         <thead>
           <tr>
@@ -112,7 +96,7 @@ export function ScheduleMatrix({
               <span>Team</span>
               <small>{nurses.length} nicknames</small>
             </th>
-            {visibleDates.map((date) => {
+            {dates.map((date) => {
               const header = formatDateHeader(date);
               return (
                 <th
@@ -135,7 +119,7 @@ export function ScheduleMatrix({
                 <span>{nurse.nickname}</span>
                 <small>{SKILL_LABELS[nurse.skillLevel]}</small>
               </th>
-              {visibleDates.map((date) => {
+              {dates.map((date) => {
                 const key = assignmentKey(nurse.id, date);
                 const shift = assignmentMap.get(key) ?? "OFF";
                 const baselineShift = baselineMap.get(key);

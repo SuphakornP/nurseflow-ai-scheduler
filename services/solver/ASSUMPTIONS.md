@@ -16,8 +16,7 @@ change them later without asking an LLM to rewrite the schedule directly.
   default described below replaces `OFF` with `ED`.
 - Day staffing is exactly 10 and Night staffing is exactly 9.
 - The published skill ranges apply independently to Day and Night.
-- The canonical trainee skill code is `TRAINEE_INC`, matching the shared app and
-  database contract.
+- The canonical trainee skill code is `TRAINEE_INC` in the solver and web app.
 - Member L0 counts toward total staffing and may work at most seven clinical
   shifts in the period. On weekdays, its non-clinical default is Education;
   OFF is available only for an explicit O1-O4 or required/locked OFF choice,
@@ -60,8 +59,8 @@ Profiles never change any frozen hospital-priority value.
 When a phase reaches only `FEASIBLE` before its time limit, the best value found is
 frozen and reported as not proven optimal. This is transparent in `phases`.
 CP-SAT uses eight search workers for responsive 28x31 generation. The demo input
-and random seed are deterministic; assignments are persisted as the version source
-of truth rather than regenerated when an existing version is exported.
+and random seed are deterministic. Export uses the selected candidate's
+in-memory assignments and validates them again.
 
 The one-cut rule is scoped per maximal contiguous requested OFF/VAC block for one
 nurse. Blocks of four days or fewer use normal O1-O4 optimization; blocks longer
@@ -75,8 +74,7 @@ than four receive the additional hard one-cut limit.
   normalized deterministically.
 - Thai Buddhist year 2569 is parsed as Gregorian year 2026.
 - Nickname is the only display identity. Solver payloads use generated
-  pseudonymous IDs, but the current importer derives them from period plus
-  nickname and the persistence bridge maps by normalized nickname. Duplicate
+  pseudonymous IDs derived from period plus normalized nickname. Duplicate
   nicknames are rejected. Stable identity across renames is future work.
 - The solver never calls an LLM and never needs an OpenAI key. AI interpretation
   and explanation belong in the application layer and should receive only the

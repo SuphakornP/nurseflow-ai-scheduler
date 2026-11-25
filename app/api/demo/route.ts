@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       solverResultToVersion(dataset, result, profiles[index], index + 1),
     );
     const response = makeGenerateResponse(dataset, versions);
-    cacheSchedule(response);
+    cacheSchedule(auth.session.sessionId, response);
     return NextResponse.json(response);
   } catch (error) {
     const serviceUnavailable = error instanceof SolverUnavailableError;

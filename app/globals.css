@@ -506,7 +506,7 @@ button:disabled {
 
 .import-controls {
   display: grid;
-  grid-template-columns: minmax(210px, 1fr) auto auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: end;
   gap: 8px;
 }
@@ -524,8 +524,9 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.import-controls input[type="url"] {
+.import-controls input:not([type="file"]) {
   width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 0 12px;
   border: 1px solid var(--line-strong);
@@ -536,6 +537,7 @@ button:disabled {
 }
 
 .file-control {
+  min-width: 0;
   min-height: 40px;
   display: inline-flex;
   align-items: center;
@@ -545,6 +547,16 @@ button:disabled {
   border-radius: 8px;
   background: rgb(255 255 255 / 35%);
   cursor: pointer;
+}
+
+.file-control span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-control:focus-within {
+  outline: 2px solid var(--accent-deep);
 }
 
 .file-control input {
@@ -1471,50 +1483,6 @@ button:disabled {
   text-align: right;
 }
 
-.confirmed-archive {
-  display: grid;
-  gap: 10px;
-  padding: 18px 12px 4px;
-  border-top: 1px solid var(--line-strong);
-  background: color-mix(in srgb, var(--accent-pale) 54%, transparent);
-}
-
-.confirmed-archive > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.confirmed-archive article {
-  min-height: 58px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  background: rgb(255 255 255 / 52%);
-}
-
-.confirmed-archive article > span {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.confirmed-archive article strong {
-  font-size: 11px;
-}
-
-.confirmed-archive article small {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 8px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .app-footer {
   min-height: 90px;
   display: flex;
@@ -1727,11 +1695,7 @@ button:disabled {
   }
 
   .import-controls {
-    grid-template-columns: 1fr auto;
-  }
-
-  .import-controls label:first-child {
-    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .review-preview {
@@ -1877,10 +1841,6 @@ button:disabled {
 
   .import-controls {
     grid-template-columns: 1fr;
-  }
-
-  .import-controls label:first-child {
-    grid-column: 1;
   }
 
   .file-control,

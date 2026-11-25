@@ -7,5 +7,5 @@ export default async function HomePage() {
   const session = await getAdminSession();
   if (!session) redirect("/login");
 
-  return <NurseFlowWorkspace admin={session} />;
+  return <NurseFlowWorkspace displayName={session.displayName} />;
 }

@@ -75,6 +75,7 @@ export async function verifyAdminSessionToken(
     }
 
     return {
+      sessionId: parsed.data.jti,
       email: parsed.data.email,
       displayName: parsed.data.displayName,
       role: parsed.data.role,

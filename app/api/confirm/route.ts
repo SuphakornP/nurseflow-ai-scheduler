@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireAdminRequest } from "@/lib/auth/request";
 import { getConfirmationEligibility } from "@/lib/confirmation-eligibility";
-import { getCachedSchedule } from "@/lib/schedule-cache";
-import { isSupabaseConfigured } from "@/lib/supabase/admin";
-import { persistAndConfirmSchedule } from "@/lib/supabase/persistence";
+import { getCachedCandidate } from "@/lib/schedule-cache";
 
 const RequestSchema = z.object({
   periodId: z.string().min(1).max(120),
@@ -22,14 +20,15 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const cached = getCachedSchedule(parsed.data.periodId);
-  const version = cached?.versions.find((item) => item.id === parsed.data.versionId);
-  if (!cached || !version) {
+  const { periodId, versionId } = parsed.data;
+  const cached = getCachedCandidate(auth.session.sessionId, periodId, versionId);
+  if (!cached) {
     return NextResponse.json(
       { error: "VERSION_NOT_FOUND", message: "Regenerate the schedule before confirmation." },
       { status: 404 },
     );
   }
+  const { version } = cached;
   const eligibility = getConfirmationEligibility(version);
   if (!eligibility.eligible) {
     const isHardFailure = eligibility.reason === "HARD_VALIDATION_FAILED";
@@ -44,43 +43,22 @@ export async function POST(request: Request) {
     );
   }
 
-  if (version.solverStatus === "DEMO" || !isSupabaseConfigured()) {
-    const confirmedAt = new Date().toISOString();
-    return NextResponse.json({
-      confirmed: true,
-      persisted: false,
-      persistenceMode: "LOCAL_DEMO",
-      versionId: version.id,
-      confirmedAt,
-      message:
-        version.solverStatus === "DEMO"
-          ? "Reference snapshot confirmed for this showcase session only. Generate a live solver result to persist it."
-          : "Confirmed for this showcase session only. Configure Supabase to persist versions.",
-    });
-  }
-
-  try {
-    const persisted = await persistAndConfirmSchedule(
-      cached,
-      version,
-      auth.session.displayName,
-    );
-    return NextResponse.json({
-      confirmed: true,
-      persisted: true,
-      persistenceMode: "SUPABASE",
-      versionId: version.id,
-      persistedVersionId: persisted.scheduleVersionId,
-      confirmedAt: persisted.confirmedAt,
-      message: `Version ${version.versionNo} was validated, confirmed, and stored immutably in Supabase.`,
-    });
-  } catch {
+  const confirmation = cached.generation.confirmation ??= {
+    versionId,
+    confirmedAt: new Date().toISOString(),
+  };
+  if (confirmation.versionId !== versionId) {
     return NextResponse.json(
       {
-        error: "SUPABASE_CONFIRM_FAILED",
-        message: "The schedule could not be confirmed. Verify that the period is staged and try again.",
+        error: "GENERATION_ALREADY_CONFIRMED",
+        message: "Another version is already confirmed for this calculation. Generate new candidates to choose again.",
       },
       { status: 409 },
     );
   }
+  return NextResponse.json({
+    confirmed: true,
+    ...confirmation,
+    message: `Version ${version.versionNo} is confirmed for this workspace. Download the Excel file to keep it.`,
+  });
 }

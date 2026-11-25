@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth/request", () => ({
   requireAdminRequest: vi.fn(async () => ({
     ok: true,
     session: {
+      sessionId: "session-1",
       email: "admin@example.com",
       displayName: "Head Scheduler",
       role: "ADMIN",
@@ -11,14 +12,11 @@ vi.mock("@/lib/auth/request", () => ({
   })),
 }));
 
-vi.mock("@/lib/schedule-cache", () => ({ getCachedSchedule: vi.fn() }));
-vi.mock("@/lib/supabase/admin", () => ({ isSupabaseConfigured: vi.fn() }));
-vi.mock("@/lib/supabase/persistence", () => ({ persistAndConfirmSchedule: vi.fn() }));
+vi.mock("@/lib/schedule-cache", () => ({ getCachedCandidate: vi.fn() }));
 
 import { POST } from "@/app/api/confirm/route";
-import { getCachedSchedule } from "@/lib/schedule-cache";
-import { isSupabaseConfigured } from "@/lib/supabase/admin";
-import { persistAndConfirmSchedule } from "@/lib/supabase/persistence";
+import { createDemoResponse } from "@/components/demo-data";
+import { getCachedCandidate } from "@/lib/schedule-cache";
 
 function hardValidation(overrides: Record<string, unknown> = {}) {
   return {
@@ -54,29 +52,28 @@ function version(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function request() {
+function request(periodId = "period-1", versionId = "version-1") {
   return new Request("http://localhost/api/confirm", {
     method: "POST",
     headers: { "content-type": "application/json", origin: "http://localhost" },
-    body: JSON.stringify({ periodId: "period-1", versionId: "version-1" }),
+    body: JSON.stringify({ periodId, versionId }),
   });
 }
 
 function cacheVersion(candidate: Record<string, unknown>) {
-  vi.mocked(getCachedSchedule).mockReturnValue({
+  vi.mocked(getCachedCandidate).mockReturnValue({
     dataset: { period: { id: "period-1" } },
-    versions: [candidate],
+    version: candidate,
+    generation: {},
   } as never);
 }
 
 describe("POST /api/confirm fail-closed gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isSupabaseConfigured).mockReturnValue(true);
-    vi.mocked(persistAndConfirmSchedule).mockResolvedValue({
-      scheduleVersionId: "persisted-version-1",
-      confirmedAt: "2026-07-16T12:00:00.000Z",
-    } as never);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.each(["OPTIMAL", "FEASIBLE"])(
@@ -94,10 +91,10 @@ describe("POST /api/confirm fail-closed gate", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
         confirmed: true,
-        persisted: true,
+        confirmedAt: expect.any(String),
         versionId: "version-1",
       });
-      expect(persistAndConfirmSchedule).toHaveBeenCalledTimes(1);
+      expect(getCachedCandidate).toHaveBeenCalledWith("session-1", "period-1", "version-1");
     },
   );
 
@@ -132,7 +129,7 @@ describe("POST /api/confirm fail-closed gate", () => {
       version({ validations: [hardValidation(), hardValidation()] }),
       "INVALID_VALIDATION_DATA",
     ],
-  ])("rejects %s before persistence", async (_name, candidate, reason) => {
+  ])("rejects %s before confirmation", async (_name, candidate, reason) => {
     cacheVersion(candidate);
 
     const response = await POST(request());
@@ -145,35 +142,45 @@ describe("POST /api/confirm fail-closed gate", () => {
         ? "HARD_CONSTRAINT_FAILURE"
         : "CONFIRMATION_NOT_ALLOWED",
     );
-    expect(persistAndConfirmSchedule).not.toHaveBeenCalled();
   });
 
-  it("keeps an eligible DEMO confirmation local even when Supabase is configured", async () => {
-    cacheVersion(version({ solverStatus: "DEMO" }));
-
-    const response = await POST(request());
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      confirmed: true,
-      persisted: false,
-      persistenceMode: "LOCAL_DEMO",
-    });
-    expect(persistAndConfirmSchedule).not.toHaveBeenCalled();
-  });
-
-  it("keeps an eligible live confirmation local when Supabase is not configured", async () => {
-    vi.mocked(isSupabaseConfigured).mockReturnValue(false);
+  it("returns the same confirmation timestamp on retries", async () => {
+    vi.useFakeTimers();
     cacheVersion(version());
+    const first = await (await POST(request())).json();
+    vi.advanceTimersByTime(60_000);
+    const second = await (await POST(request())).json();
 
+    expect(second.confirmedAt).toBe(first.confirmedAt);
+  });
+
+  it("locks one choice under concurrent confirmations and permits a separate calculation", async () => {
+    const cache = await vi.importActual<typeof import("@/lib/schedule-cache")>("@/lib/schedule-cache");
+    vi.mocked(getCachedCandidate).mockImplementation(cache.getCachedCandidate);
+    const run = createDemoResponse();
+    const periodId = run.dataset.period.id;
+    const [first, second] = run.versions;
+    cache.cacheSchedule("session-1", run);
+
+    const attempts = await Promise.all(
+      [first, second].map((candidate) => POST(request(periodId, candidate.id))),
+    );
+    expect(attempts.map((attempt) => attempt.status).sort()).toEqual([200, 409]);
+    const accepted = await attempts.find((attempt) => attempt.ok)!.json();
+    const conflict = attempts.find((attempt) => !attempt.ok)!;
+    await expect(conflict.json()).resolves.toMatchObject({ error: "GENERATION_ALREADY_CONFIRMED" });
+    await expect((await POST(request(periodId, accepted.versionId))).json()).resolves.toEqual(accepted);
+
+    const next = { ...first, id: "new-generation" };
+    cache.cacheSchedule("session-1", { ...run, versions: [next] });
+    expect((await POST(request(periodId, next.id))).status).toBe(200);
+  });
+
+  it("requires regeneration when the candidate is unavailable", async () => {
+    vi.mocked(getCachedCandidate).mockReturnValue(null);
     const response = await POST(request());
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      confirmed: true,
-      persisted: false,
-      persistenceMode: "LOCAL_DEMO",
-    });
-    expect(persistAndConfirmSchedule).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ error: "VERSION_NOT_FOUND" });
   });
 });

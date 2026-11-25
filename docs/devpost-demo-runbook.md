@@ -4,7 +4,7 @@ Use this runbook to produce the required public YouTube demo and supporting imag
 
 ## Capture guardrails
 
-- Use only the built-in synthetic MICU dataset. Do not show the real Google Sheet URL, employee codes, notes, browser history, terminal environment, or Supabase records containing real pseudonyms.
+- Use the built-in synthetic MICU dataset for the recording. Keep real sheet URLs, staff data, browser history, and terminal environment settings off screen.
 - Rehearse with `OPENAI_API_KEY` unset so normalization and explanations use deterministic fallbacks. For the final take, enable the key only if a live GPT-5.6 interaction materially improves the demo.
 - If showing live AI with the built-in dataset, make one explanation request in the final take. A normalization request is needed only if a separate privacy-reviewed synthetic import is recorded. Solver generation and Excel export are local and do not use OpenAI credits.
 - Hide notifications, password managers, developer tools, and browser autofill. Use a throwaway admin account and verify every frame before publishing.
@@ -24,11 +24,11 @@ invalid workbook as an acceptable roster.
 | Time | Screen | Voiceover focus |
 | --- | --- | --- |
 | `0:00-0:15` | Login and product title | ICU scheduling problem and accountable human decision-maker |
-| `0:15-0:38` | Reload built-in synthetic demo | Pseudonymous intake; employee-code and notes columns are discarded |
+| `0:15-0:38` | Select **Load synthetic demo** | Pseudonymous intake and previous-shift context |
 | `0:38-1:08` | Compare generated candidates | Three CP-SAT profiles and independent hard-rule validation |
 | `1:08-1:33` | Explain one outcome | One bounded GPT-5.6 explanation from structured solver evidence |
 | `1:33-1:58` | Evidence and metrics | Request satisfaction, coverage, skill mix, and assignment reasons |
-| `1:58-2:18` | Confirm and export | Fail-closed confirmation, optional persisted history, and workbook export |
+| `1:58-2:18` | Confirm and export | Verify passing hard rules, confirm the choice, and download the workbook |
 | `2:18-2:42` | Architecture or README | Exact roles of Codex and GPT-5.6 |
 | `2:42-2:50` | Product close | Faster reconciliation without autonomous staffing decisions |
 
@@ -46,7 +46,7 @@ The app can import a pseudonymous request sheet. The supplied MICU layout is sup
 
 After review, a private FastAPI service runs Google OR-Tools CP-SAT to create three candidates: request-first, balanced, and reduced Member L0 utilization. GPT-5.6 does not generate the roster. Fixed events, required choices, staffing, skill mix, and sequence safety remain hard constraints. A separate deterministic validator recomputes those rules and assignment completeness for every candidate.
 
-The workspace makes trade-offs visible. Fixed-event and required-choice evidence is shown separately from soft-request satisfaction, so the scheduler can inspect workload trade-offs without hiding mandatory inputs inside an aggregate. Confirm and export are fail-closed: only a `VALID` result with non-empty, all-passing hard-validation evidence can proceed. The chosen version is exported as a formula-safe workbook and, when Supabase has a matching staged roster, recorded as immutable schedule history.
+The scheduler can compare fixed events and required choices alongside soft requests and workload. To confirm or export a candidate, its hard-rule evidence must be present and every hard check must pass. The scheduler downloads the selected version as an Excel workbook to keep a copy after closing the workspace.
 
 Codex accelerated the cross-stack implementation, architecture review, authentication, security hardening, tests, browser QA, and documentation. GPT-5.6 is deliberately limited to ambiguous-language interpretation and evidence-grounded explanations. Constraint solving decides feasibility, independent validation checks correctness, and a human remains accountable.
 

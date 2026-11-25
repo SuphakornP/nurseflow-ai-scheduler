@@ -161,7 +161,6 @@ describe("parseConfirmationSuccess", () => {
       parseConfirmationSuccess(
         {
           confirmed: true,
-          persisted: false,
           versionId: "version-1",
           confirmedAt: "2026-07-16T12:00:00.000Z",
           message: "Confirmed.",
@@ -170,7 +169,6 @@ describe("parseConfirmationSuccess", () => {
       ),
     ).toEqual({
       confirmed: true,
-      persisted: false,
       versionId: "version-1",
       confirmedAt: "2026-07-16T12:00:00.000Z",
       message: "Confirmed.",
@@ -179,11 +177,11 @@ describe("parseConfirmationSuccess", () => {
 
   it.each([
     ["empty body", {}],
-    ["negative confirmation", { confirmed: false, persisted: false, versionId: "version-1", confirmedAt: "now" }],
-    ["missing persisted flag", { confirmed: true, versionId: "version-1", confirmedAt: "now" }],
-    ["mismatched version", { confirmed: true, persisted: false, versionId: "version-2", confirmedAt: "now" }],
-    ["missing timestamp", { confirmed: true, persisted: false, versionId: "version-1" }],
-    ["invalid message", { confirmed: true, persisted: false, versionId: "version-1", confirmedAt: "now", message: 1 }],
+    ["negative confirmation", { confirmed: false, versionId: "version-1", confirmedAt: "now" }],
+    ["missing confirmation", { versionId: "version-1", confirmedAt: "now" }],
+    ["mismatched version", { confirmed: true, versionId: "version-2", confirmedAt: "now" }],
+    ["missing timestamp", { confirmed: true, versionId: "version-1" }],
+    ["invalid message", { confirmed: true, versionId: "version-1", confirmedAt: "now", message: 1 }],
   ])("rejects a 2xx-shaped response with %s", (_name, response) => {
     expect(parseConfirmationSuccess(response, "version-1")).toBeNull();
   });

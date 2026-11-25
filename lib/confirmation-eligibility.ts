@@ -40,7 +40,6 @@ export type ConfirmationEligibility = ConfirmationEvidence &
 
 export interface ConfirmationSuccess {
   confirmed: true;
-  persisted: boolean;
   versionId: string;
   confirmedAt: string;
   message?: string;
@@ -68,13 +67,12 @@ export function parseConfirmationSuccess(
   expectedVersionId: string,
 ): ConfirmationSuccess | null {
   if (!isRecord(value)) return null;
-  if (value.confirmed !== true || typeof value.persisted !== "boolean") return null;
+  if (value.confirmed !== true) return null;
   if (value.versionId !== expectedVersionId || !isNonEmptyString(value.confirmedAt)) return null;
   if (value.message !== undefined && typeof value.message !== "string") return null;
 
   return {
     confirmed: true,
-    persisted: value.persisted,
     versionId: value.versionId,
     confirmedAt: value.confirmedAt,
     ...(value.message === undefined ? {} : { message: value.message }),

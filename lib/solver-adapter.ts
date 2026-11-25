@@ -389,7 +389,7 @@ export function solverResultToVersion(
   };
   const valid = Boolean(result.validation?.is_valid);
   return {
-    id: `${dataset.period.id}-${profile}`,
+    id: crypto.randomUUID(),
     versionNo,
     name: profileNames[profile],
     status: valid ? "VALID" : "INVALID",

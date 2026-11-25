@@ -1,12 +1,12 @@
 # NurseFlow AI
 
 Admin-only, privacy-aware nurse scheduling decision support built for OpenAI
-Build Week. NurseFlow turns a pseudonymous nurse request sheet into validated
-ICU roster candidates, explains trade-offs, records the selected version, and
-exports a review-ready workbook. The supplied MICU form is supported, but its
-employee-code and notes columns are discarded during import. Shift cells are
-treated as nurse preferences; staffing safety, skill mix, and sequence rules
-remain hard constraints.
+Build Week. Start with the synthetic MICU dataset or upload an Excel workbook
+with prior shifts and current requests. NurseFlow calculates ICU roster
+candidates, explains trade-offs, and exports a validated workbook. It runs
+without a database. The importer drops employee codes and notes from the
+supported MICU form. Prior shifts inform sequence checks, while current-month
+requests distinguish fixed events, required choices, and preferences.
 
 > **Project status:** public hackathon prototype. The source is open, but the
 > admin workspace is not anonymously accessible, and solver work endpoints
@@ -25,7 +25,6 @@ remain hard constraints.
 - [Data and import contract](#data-and-import-contract)
 - [Scheduling and validation](#scheduling-and-validation)
 - [API surface](#api-surface)
-- [Supabase persistence](#supabase-persistence)
 - [Testing and quality](#testing-and-quality)
 - [Deployment](#deployment)
 - [Security and data-use warning](#security-and-data-use-warning)
@@ -55,7 +54,7 @@ confirm a schedule.
 
 ```text
 Sign in as administrator
-  -> import Google Sheet or .xlsx
+  -> load synthetic data or import an .xlsx or Google Sheet
   -> normalize request values
   -> review every ambiguous value
   -> generate three CP-SAT candidates
@@ -63,7 +62,6 @@ Sign in as administrator
   -> compare fulfilled and unmet requests, balance, and L0 usage
   -> inspect assignment-level and hard-validation evidence
   -> choose and confirm one eligible valid version
-  -> persist immutable history when Supabase is configured
   -> export only a validated Excel workbook
 ```
 
@@ -80,13 +78,12 @@ Key capabilities include:
 - explicit trade-offs between preference satisfaction and operational goals,
   with assignment evidence, unfulfilled-request explanations, validation
   results, daily coverage, and workload metrics;
-- immutable Supabase confirmation history and archive export when persistence is
-  configured;
-- a deterministic local fallback when OpenAI or Supabase is intentionally absent.
+- Excel export in the sanitized layout of the uploaded workbook;
+- deterministic suggestions and explanations when OpenAI is unconfigured.
 
 ## Demo gallery
 
-These 3:2 frames use the built-in synthetic August 2026 MICU dataset.
+These 3:2 frames from the Build Week demo use the built-in synthetic August 2026 MICU dataset.
 They contain no real staff, patient, employee-code, or source-sheet data.
 
 <table>
@@ -118,21 +115,20 @@ flowchart LR
     N -->|"Bearer service token"| F["Private FastAPI service"]
     F --> C["OR-Tools CP-SAT"]
     F --> V["Independent validator"]
-    N -->|"Server credentials"| S["Supabase Postgres"]
+    N --> M["Expiring in-memory candidates and workbook templates"]
     F --> X["Validated Excel export"]
 ```
 
 | Component | Responsibility | Trust boundary |
 | --- | --- | --- |
-| Next.js | UI, admin session, imports, orchestration, OpenAI calls, persistence | Only browser-facing application service |
+| Next.js | UI, admin session, imports, solver orchestration, temporary caches, OpenAI calls | Only browser-facing application service |
 | FastAPI | Deterministic demo input, optimization, validation, workbook export | Internal service; work endpoints require a bearer token |
 | OpenAI | Structured suggestions and evidence-grounded explanations | Receives bounded, nickname-level context; `store: false` |
-| Supabase | Period inputs, candidate versions, validation evidence, confirmation history | Grants and RLS constrain browser access; the privileged server key remains server-only |
 | Browser | Human review, candidate comparison, explicit confirmation | Never receives server secrets or calls the solver directly |
 
-Failure is explicit. Missing OpenAI configuration uses deterministic suggestions;
-missing Supabase configuration displays confirmation only in the current browser
-workspace; solver failures return a service error instead of a fabricated result.
+Confirmation applies to the open workspace. Download the workbook to keep
+the roster. The page resets on reload. A solver failure leaves live generation
+and export unavailable.
 
 ## Built with Codex and OpenAI
 
@@ -215,16 +211,12 @@ Run one service at a time with `npm run dev` or `npm run dev:solver`.
 | --- | --- | --- | --- |
 | `ADMIN_EMAIL` | Yes | Server | Email for the only permitted administrator |
 | `ADMIN_PASSWORD` | Yes | Server | Event-only plaintext deployment secret; minimum 12 characters |
-| `ADMIN_DISPLAY_NAME` | Yes | Server | Header identity and non-email audit actor; maximum 80 characters |
+| `ADMIN_DISPLAY_NAME` | Yes | Server | Displayed administrator name, maximum 80 characters |
 | `AUTH_SECRET` | Yes | Server | Signs eight-hour admin sessions; independent random value, minimum 32 characters |
 | `SOLVER_API_URL` | For live generation | Server | Private solver base URL; defaults to `http://127.0.0.1:8000` |
 | `SOLVER_API_TOKEN` | For live generation | Server | Bearer token shared only with FastAPI; minimum 32 characters |
 | `OPENAI_API_KEY` | No | Server | Enables AI normalization suggestions and explanations |
 | `OPENAI_MODEL` | No | Server | OpenAI model; defaults to `gpt-5.6-terra` |
-| `NEXT_PUBLIC_SUPABASE_URL` | For persistence | Browser-visible | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | No (reserved) | Browser-visible | Reserved browser-client helper; no current UI path consumes it |
-| `SUPABASE_SECRET_KEY` | For persistence | Server | Trusted candidate persistence and confirmation RPC access |
-| `NEXT_PUBLIC_DEMO_MODE` | No | Browser-visible | Reserved showcase setting; currently does not bypass auth or change runtime behavior |
 
 ### Solver environment
 
@@ -234,14 +226,18 @@ match the root value. The solver compares bearer tokens in constant time.
 | Optional integration | Behavior when absent |
 | --- | --- |
 | OpenAI | Known values remain deterministic; ambiguous values still require human review; reason-code explanations remain available |
-| Supabase | Confirmation is displayed in the current browser workspace, marked `LOCAL_DEMO`, and lost on refresh |
-| Solver | The UI can show its precomputed synthetic snapshot, but live generation and service-backed Excel export are unavailable |
+| Solver | The UI can show a bundled synthetic preview. Run the solver to calculate candidates and export a workbook. Only a generated, validated candidate can be confirmed. |
 
 Admin authentication is always required. Configuration failures close access
 rather than creating a public demo mode.
 
 ## Data and import contract
 
+In **Import**, set **Scheduling month** and **Previous days in workbook**
+(1–62), choose your `.xlsx`, and select **Review source**. Review any
+ambiguous cells, then select **Generate candidates**. To try the workflow
+with mock inputs, select **Load synthetic demo**. The initial page shows a
+preview until you run the solver.
 The importer accepts either the normalized template or the supplied MICU
 request-form layout. The first worksheet must include:
 
@@ -262,20 +258,23 @@ The supplied MICU layout is accepted only with the expected 28-person compositio
 8 Incharge, 4 Trainee, 11 Member L1, 4 Member L2, and 1 Member L0. Generic
 nickname-only templates are not subject to that MICU-specific composition check.
 
-Each monthly import is a separate source snapshot. The current workspace is
-configured for August 2026; a later month should use its own period configuration
-and Google Sheet URL. Nicknames may change between monthly files because the
-row-to-cell mapping is rebuilt from that import. The showcase still derives
-identity from period plus nickname, so this is not a production identity scheme.
+For example, with August 2026 and three context days, include July 29, 30, and 31
+followed by August 1 through 31. For every nurse, enter an actual prior assignment
+(`D`, `N`, `OFF`, `VAC`, or `ED`) for each July date. Enter requests in the
+August columns. Blank request cells indicate availability. When importing a
+different month, use the matching dates in the sheet and the workspace.
+Each import rebuilds its row mapping from the period and nickname.
 
 For an imported roster, export is bound to the exact sanitized source snapshot.
 NurseFlow retains the first-sheet layout and styles, overwrites only the current
 period cells with `D`, `N`, `OFF`, `Vac`, or `ชED`, and adds `Summary`,
 `Validation`, `Unfulfilled Requests`, and `Metadata`. Employee-code/note values,
 comments, formulas, hyperlinks, unrelated sheets, embedded content, defined
-names, and identifying workbook properties are removed. The in-memory template
-expires with the eight-hour admin session or on process restart; re-import is then
-required instead of silently exporting into another template.
+names, and identifying workbook properties are removed. The web server makes
+generated candidates available for up to 30 minutes and sanitized templates for
+up to eight hours in bounded process memory. Regenerate an expired candidate. If the
+template expires, the server restarts, or you sign in again, re-import the
+workbook and generate again.
 
 Google exports may contain a relationship-free empty drawing placeholder and
 style-only rows. The importer accepts only that empty placeholder, rejects
@@ -367,15 +366,14 @@ same-origin request.
 | --- | --- | --- |
 | `/api/auth/login` | `POST` | Validate the single admin and create the session cookie |
 | `/api/auth/logout` | `POST` | Delete the session and redirect to `/login` |
-| `/api/health` | `GET` | Authenticated readiness for solver, OpenAI mode, and persistence mode |
+| `/api/health` | `GET` | Authenticated solver readiness and OpenAI mode |
 | `/api/import` | `POST` | Parse a bounded `.xlsx` upload or Google Sheet export |
 | `/api/normalize` | `POST` | Suggest mappings for reviewed ambiguous tokens |
 | `/api/demo` | `POST` | Load and solve the synthetic showcase dataset |
 | `/api/generate` | `POST` | Generate all three candidate profiles from a validated dataset |
 | `/api/explain` | `POST` | Explain an outcome from structured facts |
 | `/api/confirm` | `POST` | Recheck and confirm a cached valid candidate |
-| `/api/history` | `GET` | Read confirmed Supabase history for a period |
-| `/api/export` | `POST` | Export a current or persisted validated version |
+| `/api/export` | `POST` | Revalidate and export a generated candidate from this login |
 
 ### FastAPI service
 
@@ -388,36 +386,6 @@ same-origin request.
 
 FastAPI intentionally has no CORS middleware and disables `/docs`, `/redoc`, and
 `/openapi.json`. Browsers must call Next.js, never FastAPI directly.
-
-## Supabase persistence
-
-The migration in `supabase/migrations/` defines 18 nickname-only application
-tables, explicit grants, forced Row Level Security, audit fields, immutable
-confirmed versions, and bounded server-only RPCs. The synthetic seed creates the
-MICU department, rule configuration, 28 nurses, August 2026 period, prior
-context, and normalized requests.
-
-Local Supabase development:
-
-```bash
-npx supabase@latest start
-npx supabase@latest db reset
-npx supabase@latest db lint --local
-```
-
-Apply the migration to a dedicated remote project only after review:
-
-```bash
-npx supabase@latest link --project-ref YOUR_PROJECT_REF
-npx supabase@latest db push
-```
-
-The live dataset must match staged period employees before confirmation. The
-repository does not automatically apply migrations to a remote project or
-create Storage buckets. Import/export buckets must be private and accessed only
-through signed or server-side operations.
-
-Read [the database guide](docs/database.md) before using a shared project.
 
 ## Testing and quality
 
@@ -440,9 +408,8 @@ no automated end-to-end browser suite is checked in. Run the commands above for
 the current test totals instead of copying counts into documentation.
 
 The pull-request workflow runs lint, type checking, both test suites, and the
-production build with live OpenAI and Supabase credentials explicitly absent.
-These checks use local mocks and OR-Tools only, so review runs do not consume
-OpenAI or Supabase API credits. Normal GitHub Actions runner usage still applies.
+production build with the OpenAI key unset. These checks use local mocks
+and OR-Tools. Normal GitHub Actions runner usage still applies.
 
 ## Deployment
 
@@ -465,8 +432,8 @@ For a hosted deployment:
    `AUTH_SECRET`.
 5. Add edge request-size limits, shared rate limits, logs, monitoring, and
    appropriate service timeouts.
-6. Use a dedicated Supabase project with reviewed migration, RLS, grants, and
-   private Storage.
+6. Run Next.js as a single long-lived process so import, generation, and export
+   can reach the same temporary caches.
 
 ## Security and data-use warning
 
@@ -475,10 +442,9 @@ upload, or paste into issues, pull requests, screenshots, demo videos, CI logs,
 or public judge instructions any real staff/patient data or any value from
 `.env.local`. Treat nicknames as pseudonymous personal data in real deployments.
 
-Never expose `OPENAI_API_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_PASSWORD`,
+Never expose `OPENAI_API_KEY`, `ADMIN_PASSWORD`,
 `AUTH_SECRET`, or `SOLVER_API_TOKEN`. Variables beginning with `NEXT_PUBLIC_`
-are browser-visible by design. A Supabase publishable key is not a server secret,
-but it is safe only when grants and RLS have been reviewed.
+are browser-visible by design.
 
 Admin access uses a signed, host-only, `HttpOnly`, `SameSite=Strict` cookie with
 an absolute eight-hour lifetime; production adds `Secure`. Verification checks
@@ -487,8 +453,7 @@ failures are limited to five per 15 minutes **per Next.js process**. Rotating
 `AUTH_SECRET` invalidates all active sessions.
 
 There is no signup, external-user role, password reset, remember-me, or
-client-side token storage. The event UI does not use Supabase Auth; database
-roles in the migration are reserved for a future managed-auth deployment.
+client-side token storage.
 
 OpenAI normalization receives an ambiguous token plus a pseudonymous request
 identifier containing the nurse ID and date. Explanation calls include nickname,
@@ -509,17 +474,13 @@ app/                     Next.js pages and server Route Handlers
   api/                   Authenticated application APIs and auth endpoints
   login/                 Admin access checkpoint
 components/              Login, workspace, schedule matrix, and demo UI
-lib/                     Contracts, auth, import, OpenAI, solver, export, Supabase
+lib/                     Contracts, auth, import, OpenAI, solver, and export
   auth/                  Config, credentials, JWT sessions, proxy helpers, tests
-  supabase/              Browser/admin clients and candidate persistence
 services/solver/
   app/                   FastAPI, CP-SAT, validator, normalization, export
   tests/                 Pytest model, API, optimization, and boundary tests
   ASSUMPTIONS.md          Scheduling rule decisions
-supabase/
-  migrations/            Versioned Postgres schema
-  seed.sql                Synthetic MICU showcase data
-docs/                     Architecture, database, privacy, and submission notes
+docs/                     Architecture, privacy, and submission notes
 .github/workflows/ci.yml  Credit-safe pull-request verification
 proxy.ts                  Next.js page/API authentication filter
 security_best_practices_report.md
@@ -531,7 +492,6 @@ AGENTS.md                 Contributor and coding conventions
 | Document | Contents |
 | --- | --- |
 | [Architecture](docs/architecture.md) | Runtime boundaries, auth flow, failure behavior, and deployment shape |
-| [Database](docs/database.md) | Schema, RLS, grants, persistence RPCs, immutability, and seed data |
 | [Privacy](docs/privacy.md) | Inbound data, OpenAI disclosure, storage, administrator identity, and production follow-up |
 | [Solver service](services/solver/README.md) | FastAPI setup and endpoint contract |
 | [Solver assumptions](services/solver/ASSUMPTIONS.md) | Business-rule interpretations and known boundaries |

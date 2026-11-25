@@ -24,6 +24,7 @@ describe("admin session token", () => {
     await expect(
       verifyAdminSessionToken(token, config, new Date("2026-07-16T03:00:00.000Z")),
     ).resolves.toMatchObject({
+      sessionId: expect.any(String),
       email: config.email,
       displayName: config.displayName,
       role: "ADMIN",

@@ -1,11 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 import {
   cacheSourceWorkbookTemplate,
   getSourceWorkbookTemplate,
-  resetSourceWorkbookTemplateCacheForTests,
 } from "@/lib/source-workbook-cache";
 import type { SourceWorkbookTemplate } from "@/lib/source-workbook-template";
 
@@ -20,34 +19,38 @@ function template(marker: number): SourceWorkbookTemplate {
 }
 
 describe("source workbook cache", () => {
-  beforeEach(() => {
-    resetSourceWorkbookTemplateCacheForTests();
+  afterEach(() => {
     vi.useRealTimers();
   });
 
   it("bounds retained monthly templates and evicts the oldest entry", () => {
     for (let index = 1; index <= 5; index += 1) {
-      cacheSourceWorkbookTemplate(`period-${index}`, template(index));
+      cacheSourceWorkbookTemplate("session-1", `period-${index}`, template(index));
     }
 
-    expect(getSourceWorkbookTemplate("period-1")).toBeNull();
-    expect(getSourceWorkbookTemplate("period-5")?.bytes).toEqual(new Uint8Array([5]));
+    expect(getSourceWorkbookTemplate("session-1", "period-1", template(1).sourceHash)).toBeNull();
+    expect(getSourceWorkbookTemplate("session-1", "period-5", template(5).sourceHash)?.bytes)
+      .toEqual(new Uint8Array([5]));
   });
 
   it("expires templates rather than exporting stale source data", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-01T00:00:00Z"));
-    cacheSourceWorkbookTemplate("period-1", template(1));
+    cacheSourceWorkbookTemplate("session-1", "period-1", template(1));
     vi.advanceTimersByTime(8 * 60 * 60 * 1000 + 1);
 
-    expect(getSourceWorkbookTemplate("period-1")).toBeNull();
+    expect(getSourceWorkbookTemplate("session-1", "period-1", template(1).sourceHash)).toBeNull();
   });
 
-  it("does not return a template from a different import snapshot", () => {
-    const cached = template(1);
-    cacheSourceWorkbookTemplate("period-1", cached);
+  it("keeps same-period imports distinct and scoped to the authenticated session", () => {
+    const first = template(1);
+    const second = template(2);
+    cacheSourceWorkbookTemplate("session-1", "period-1", first);
+    cacheSourceWorkbookTemplate("session-1", "period-1", second);
 
-    expect(getSourceWorkbookTemplate("period-1", "f".repeat(64))).toBeNull();
-    expect(getSourceWorkbookTemplate("period-1", cached.sourceHash)).toBe(cached);
+    expect(getSourceWorkbookTemplate("session-1", "period-1", first.sourceHash)).toBe(first);
+    expect(getSourceWorkbookTemplate("session-1", "period-1", second.sourceHash)).toBe(second);
+    expect(getSourceWorkbookTemplate("session-2", "period-1", first.sourceHash)).toBeNull();
+    expect(getSourceWorkbookTemplate("session-1", "period-1", "f".repeat(64))).toBeNull();
   });
 });

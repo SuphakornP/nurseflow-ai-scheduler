@@ -28,7 +28,7 @@ const dataset: ScheduleDataset = {
   privacyMode: "NICKNAME_ONLY",
 };
 
-async function sourceWorkbookBytes() {
+async function sourceWorkbookBytes(edit?: (workbook: ExcelJS.Workbook) => void) {
   const workbook = new ExcelJS.Workbook();
   workbook.title = "Confidential scheduling workbook";
   const sheet = workbook.addWorksheet("Request Form");
@@ -51,12 +51,38 @@ async function sourceWorkbookBytes() {
   sheet.getCell("AM3").value = "HIDDEN-CODE-777";
   sheet.getColumn("AM").hidden = true;
   workbook.addWorksheet("Unrelated Hidden Data").addRow(["must-not-survive"]);
+  edit?.(workbook);
   const buffer = await workbook.xlsx.writeBuffer();
   const bytes = new Uint8Array(buffer);
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 }
 
 describe("source workbook template", () => {
+  it("accepts another month's sheet with the same headers and staff", async () => {
+    const bytes = await sourceWorkbookBytes((workbook) => {
+      const [currentMonth, otherMonth] = workbook.worksheets;
+      otherMonth.addRow(currentMonth.getRow(2).values);
+      otherMonth.addRow(["OLD-EMP-001", "Alpha", "Incharge", "D", "N", "O"]);
+    });
+    const template = await prepareSourceWorkbookTemplate(bytes, dataset);
+    const output = new ExcelJS.Workbook();
+    await output.xlsx.load(template.bytes as unknown as Parameters<typeof output.xlsx.load>[0]);
+    expect(output.worksheets.map((sheet) => sheet.name)).toEqual(["Request Form"]);
+    expect(output.worksheets[0].getCell("B3").value).toBe("Alpha");
+    expect(output.worksheets[0].getCell("A3").value).toBeNull();
+  });
+
+  it("keeps checking private fields when an extra sheet repeats a permitted nickname", async () => {
+    const bytes = await sourceWorkbookBytes((workbook) => {
+      const [currentMonth, otherMonth] = workbook.worksheets;
+      currentMonth.getCell("AL3").value = "Alpha";
+      otherMonth.addRow(["Alpha"]);
+    });
+    await expect(prepareSourceWorkbookTemplate(bytes, dataset)).rejects.toThrow(
+      "Sensitive source content remained",
+    );
+  });
+
   it("preserves the first-sheet layout while removing codes, notes, and unrelated sheets", async () => {
     const template = await prepareSourceWorkbookTemplate(await sourceWorkbookBytes(), dataset);
 

@@ -4,6 +4,7 @@ vi.mock("@/lib/auth/request", () => ({
   requireAdminRequest: vi.fn(async () => ({
     ok: true,
     session: {
+      sessionId: "session-1",
       email: "admin@example.com",
       displayName: "Head Scheduler",
       role: "ADMIN",
@@ -13,17 +14,9 @@ vi.mock("@/lib/auth/request", () => ({
 
 vi.mock("@/lib/openai-explanation", () => ({ explainScheduleOutcome: vi.fn() }));
 vi.mock("@/lib/openai-normalization", () => ({ suggestNormalizations: vi.fn() }));
-vi.mock("@/lib/supabase/persistence", () => ({ persistAndConfirmSchedule: vi.fn() }));
-vi.mock("@/lib/supabase/persisted-export", () => ({
-  loadPersistedVersionForExport: vi.fn(),
-}));
-vi.mock("@/lib/supabase/admin", () => ({
-  createAdminClient: vi.fn(),
-  isSupabaseConfigured: vi.fn(),
-}));
 vi.mock("@/lib/schedule-cache", () => ({
   cacheSchedule: vi.fn(),
-  getCachedSchedule: vi.fn(),
+  getCachedCandidate: vi.fn(),
 }));
 vi.mock("@/lib/solver-adapter", () => ({
   datasetToSolverProblem: vi.fn(() => ({})),
@@ -57,25 +50,21 @@ vi.mock("@/lib/solver-client", () => {
   };
 });
 
-import { POST as confirm } from "@/app/api/confirm/route";
 import { POST as demo } from "@/app/api/demo/route";
 import { POST as explain } from "@/app/api/explain/route";
 import { POST as exportSchedule } from "@/app/api/export/route";
 import { POST as generate } from "@/app/api/generate/route";
 import { GET as health } from "@/app/api/health/route";
-import { GET as history } from "@/app/api/history/route";
 import { POST as normalize } from "@/app/api/normalize/route";
 import { explainScheduleOutcome } from "@/lib/openai-explanation";
 import { suggestNormalizations } from "@/lib/openai-normalization";
-import { getCachedSchedule } from "@/lib/schedule-cache";
+import { getCachedCandidate } from "@/lib/schedule-cache";
 import {
   callSolver,
   callSolverBinary,
   SolverRejectedError,
   SolverUnavailableError,
 } from "@/lib/solver-client";
-import { createAdminClient, isSupabaseConfigured } from "@/lib/supabase/admin";
-import { persistAndConfirmSchedule } from "@/lib/supabase/persistence";
 
 const INTERNAL_DETAIL = "provider-internal-detail: upstream stack context";
 const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -121,27 +110,24 @@ async function expectSanitized(
 describe("API provider error sanitization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(isSupabaseConfigured).mockReturnValue(true);
-    vi.mocked(getCachedSchedule).mockReturnValue({
-      dataset: { period: {} },
-      versions: [
-        {
-          id: "version-1",
-          versionNo: 1,
-          status: "VALID",
-          solverStatus: "OPTIMAL",
-          validations: [
-            {
-              code: "COVERAGE",
-              name: "Coverage",
-              type: "HARD",
-              status: "PASS",
-              violationCount: 0,
-              details: [],
-            },
-          ],
-        },
-      ],
+    vi.mocked(getCachedCandidate).mockReturnValue({
+      dataset: { period: {}, nurses: [] },
+      version: {
+        id: "version-1",
+        versionNo: 1,
+        status: "VALID",
+        solverStatus: "OPTIMAL",
+        validations: [
+          {
+            code: "COVERAGE",
+            name: "Coverage",
+            type: "HARD",
+            status: "PASS",
+            violationCount: 0,
+            details: [],
+          },
+        ],
+      },
     } as never);
   });
 
@@ -183,46 +169,7 @@ describe("API provider error sanitization", () => {
     );
   });
 
-  it("does not expose Supabase query or confirmation errors", async () => {
-    const query = {
-      select: vi.fn(),
-      eq: vi.fn(),
-      is: vi.fn(),
-      maybeSingle: vi.fn().mockResolvedValue({
-        data: null,
-        error: { message: INTERNAL_DETAIL },
-      }),
-    };
-    query.select.mockReturnValue(query);
-    query.eq.mockReturnValue(query);
-    query.is.mockReturnValue(query);
-    vi.mocked(createAdminClient).mockReturnValue({
-      from: vi.fn(() => query),
-    } as never);
-    vi.mocked(persistAndConfirmSchedule).mockRejectedValue(new Error(INTERNAL_DETAIL));
-
-    await expectSanitized(
-      await history(new Request("http://localhost/api/history?periodId=period-1")),
-      {
-        status: 500,
-        error: "HISTORY_QUERY_FAILED",
-        message: "Schedule history is temporarily unavailable. Try again shortly.",
-      },
-    );
-
-    await expectSanitized(
-      await confirm(
-        postRequest("/api/confirm", { periodId: "period-1", versionId: "version-1" }),
-      ),
-      {
-        status: 409,
-        error: "SUPABASE_CONFIRM_FAILED",
-        message: "The schedule could not be confirmed. Verify that the period is staged and try again.",
-      },
-    );
-  });
-
-  it("keeps export status codes without exposing solver or persistence details", async () => {
+  it("keeps export status codes without exposing solver details", async () => {
     vi.mocked(callSolverBinary).mockRejectedValue(new SolverUnavailableError(INTERNAL_DETAIL));
     await expectSanitized(
       await exportSchedule(

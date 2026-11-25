@@ -7,6 +7,7 @@ NurseFlow separates probabilistic language work from deterministic scheduling wo
 ```mermaid
 flowchart LR
     A[Pseudonymous monthly request Sheet or Excel] --> B[Bounded parser and source sanitizer]
+    M[Synthetic MICU dataset] --> E[CP-SAT optimizer]
     B --> C[AI ambiguity suggestions]
     C --> D[Human review]
     D --> E[CP-SAT optimizer]
@@ -16,7 +17,7 @@ flowchart LR
     G --> H{Admin review}
     H -->|regenerate| E
     H -->|choose eligible version| I[Fail-closed approval gate]
-    I -->|confirm| S[Supabase version record]
+    I -->|confirm| S[Confirmation shown in the open workspace]
     I -->|export to bound source snapshot| J[Validated Excel workbook]
 ```
 
@@ -30,7 +31,7 @@ flowchart LR
 - CP-SAT is the only component allowed to create a complete roster.
 - The validator re-computes every hard rule from assignments and previous-month context.
 - The administrator compares three optimization profiles, with mandatory evidence separated from unmet soft requests, before choosing a version.
-- Confirmation and export require `VALID` status plus a nonempty, entirely passing hard-validation set. Confirmation is executed atomically in Postgres when persistence is configured.
+- Confirmation and export require a generated candidate with `VALID` status plus a nonempty, entirely passing hard-validation set. Export uses the cached assignments and FastAPI validates them again when building the workbook.
 
 ## Runtime components
 
@@ -43,8 +44,7 @@ flowchart TB
     SOLVER[FastAPI scheduling service]
     SAT[OR-Tools CP-SAT]
     VALIDATE[Independent validator]
-    DB[(Supabase Postgres)]
-    STORE[(Supabase Storage)]
+    MEMORY[Temporary candidates and workbook templates]
 
     ADMIN -->|HttpOnly signed session| UI
     UI --> API
@@ -52,11 +52,20 @@ flowchart TB
     API -->|Bearer service token| SOLVER
     SOLVER --> SAT
     SOLVER --> VALIDATE
-    API --> DB
-    API --> STORE
+    API --> MEMORY
 ```
 
 The browser never calls the solver directly. FastAPI does not enable CORS; Next.js attaches the shared bearer token when calling `/demo`, `/generate`, and `/export`. The public `/health` route returns only minimal status.
+
+## Workspace lifetime
+
+The browser holds the reviewed dataset, selected candidate, and confirmation
+in page memory. Reloading the page starts a new workspace. Each server-side
+candidate and sanitized Excel template is scoped to the login that created it.
+The Next.js process can serve generated candidates for up to 30 minutes and
+templates for up to eight hours. Capacity limits can evict entries earlier and
+a process restart clears both caches. The downloaded workbook is the durable
+result.
 
 ## Authentication boundary
 
@@ -68,7 +77,8 @@ The browser never calls the solver directly. FastAPI does not enable CORS; Next.
 ## Failure behavior
 
 - Missing OpenAI key: deterministic suggestions and reason-code explanations; human review remains required.
-- Missing Supabase credentials: local showcase session only, clearly labeled as not persisted.
+- If a generated candidate expires, regenerate it. If its workbook template
+  expires or is evicted, re-import and regenerate before exporting.
 - Solver input rejected: FastAPI returns `422`; Next.js preserves `422`, adds a
   server-generated `x-request-id`, and logs only the profile, aggregate counts,
   safe validation categories, and allowlisted field paths.
@@ -81,11 +91,11 @@ The browser never calls the solver directly. FastAPI does not enable CORS; Next.
 
 ## Deployment shape
 
-- Deploy `app/` on a Node-compatible Next.js host.
+- Deploy `app/` on a Node-compatible Next.js host. Keep import, generation, and
+  export on the same long-running process so they can access its temporary data.
 - Deploy `services/solver/` as a long-running Python service with at least one CPU and a request timeout above the solver limit.
 - Set `SOLVER_API_URL` to the private service endpoint.
 - Set a matching random `SOLVER_API_TOKEN` on Next.js and the solver; do not expose the solver work endpoints directly to browsers.
 - Browsers call only Next.js; the solver intentionally does not enable CORS. Its `/health` endpoint exposes only minimal service status, while `/demo`, `/generate`, and `/export` require the bearer service token.
 - Set the single event administrator and `AUTH_SECRET` only in the Next.js secret store. Rotate the signing secret to revoke all sessions.
-- Use a dedicated Supabase project or branch for the event.
-- Keep OpenAI and Supabase secret keys in the server-side deployment secret store.
+- Keep the optional OpenAI key in the server-side deployment secret store.
