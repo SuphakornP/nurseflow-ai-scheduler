@@ -30,7 +30,7 @@ NurseFlow belongs in Work & Productivity because it improves a real operational 
 
 ### Built with
 
-`GPT-5.6`, `Codex`, `OpenAI Responses API`, `Next.js`, `React`, `TypeScript`, `FastAPI`, `Python`, `Google OR-Tools CP-SAT`, `Supabase`, `Zod`, `ExcelJS`, `Vitest`, `pytest`
+`GPT-5.6`, `Codex`, `OpenAI Responses API`, `Next.js`, `React`, `TypeScript`, `FastAPI`, `Python`, `Google OR-Tools CP-SAT`, `Zod`, `ExcelJS`, `Vitest`, `pytest`
 
 ### Project description
 
@@ -41,13 +41,13 @@ Nurse schedules are high-stakes operational documents assembled from staffing ru
 
 ## What it does
 
-NurseFlow imports pseudonymous nurse request sheets, normalizes ambiguous request values for human review, and creates multiple ICU roster candidates. It supports the supplied MICU form while discarding employee codes and notes before the normalized dataset reaches the browser workflow, solver, OpenAI, or exports. Approved Vacation and non-L0 Education are fixed, O/D and O/N remain inside their required choice sets, and only soft requests may yield to staffing or sequence safety. An independent validator checks the hard rules, and schedulers compare mandatory evidence, soft-request satisfaction, and workload trade-offs before confirming one valid version and exporting a review-ready workbook. When Supabase has a matching staged period roster, confirmation also saves an immutable schedule-version history.
+NurseFlow can start with synthetic MICU data or an uploaded Excel workbook containing previous shifts and the month's requests. It normalizes ambiguous values for human review and creates multiple ICU roster candidates. It supports the supplied MICU form while discarding employee codes and notes before the normalized dataset reaches the browser workflow, solver, OpenAI, or exports. Approved Vacation and non-L0 Education are fixed, O/D and O/N remain inside their required choice sets, and only soft requests may yield to staffing or sequence safety. An independent validator checks the hard rules, and schedulers compare mandatory evidence, soft-request satisfaction, and workload trade-offs before confirming one valid version and downloading a review-ready workbook.
 
-The application is admin-only. Public examples use synthetic nicknames and no patient data. The configured administrator email is never written to scheduling records.
+The application is admin-only. Public examples use synthetic nicknames and no patient data.
 
 ## How we built it
 
-The interface and server boundary use Next.js, React, and TypeScript. A private FastAPI service models the roster with Google OR-Tools CP-SAT. Supabase stores confirmed versions and validation evidence, while ExcelJS and openpyxl produce exports.
+The interface and server boundary use Next.js, React, and TypeScript. A private FastAPI service models the roster with Google OR-Tools CP-SAT. The web server holds candidates and sanitized workbook templates in temporary memory. ExcelJS processes inputs and openpyxl writes the downloadable workbook.
 
 GPT-5.6 is used through the OpenAI Responses API with Structured Outputs to suggest normalization for ambiguous request tokens and to explain solver evidence. It does **not** generate the roster: CP-SAT creates assignments, a separate deterministic validator checks them, and a human scheduler approves the result.
 
@@ -60,7 +60,7 @@ The hardest part was keeping feasibility, privacy, and explainability aligned. W
 ## Accomplishments
 
 - End-to-end prototype path for import, review, optimization, validation, comparison, confirmation, and export
-- Immutable candidate history when Supabase has a matching staged period roster
+- Excel-based scheduling with previous-month context and a downloadable roster
 - Independent validation of every generated candidate
 - Admin-only JWT session and protected server-to-server solver boundary
 - Formula-safe spreadsheet exports and bounded runtime inputs
@@ -73,7 +73,7 @@ AI is most useful here at the ambiguous edges: interpreting messy request notati
 
 ## What's next
 
-Before any hospital pilot, we would move identity to managed authentication with MFA, add shared abuse controls and session revocation, introduce stable pseudonymous employee identity and transactional roster synchronization, harden deployment and spreadsheet decompression limits, and validate the workflow with real scheduling teams under an approved privacy and governance process.
+Before any hospital pilot, we would move identity to managed authentication with MFA, add shared abuse controls and session revocation, harden deployment and spreadsheet decompression limits, and validate the workflow with real scheduling teams under an approved privacy and governance process.
 ```
 
 ## Required submission questions
@@ -98,7 +98,7 @@ Demo URL: [ADD DEPLOYED URL, OR STATE THAT JUDGES SHOULD RUN LOCALLY]
 Local setup:
 1. Copy .env.example to .env.local and services/solver/.env.example to services/solver/.env.local.
 2. Set ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_DISPLAY_NAME, and a random AUTH_SECRET in the root file.
-3. Set one separate random SOLVER_API_TOKEN in both files. OpenAI and Supabase are optional for the local fallback path.
+3. Set one separate random SOLVER_API_TOKEN in both files. OpenAI is optional.
 4. Run npm ci and uv sync --directory services/solver --extra dev --locked.
 5. Run npm run dev:all and open http://localhost:3000.
 

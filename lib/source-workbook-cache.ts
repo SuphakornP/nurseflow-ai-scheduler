@@ -1,45 +1,24 @@
 import "server-only";
 
 import type { SourceWorkbookTemplate } from "@/lib/source-workbook-template";
+import { TemporaryCache } from "@/lib/temporary-cache";
 
-interface CacheEntry {
-  value: SourceWorkbookTemplate;
-  expiresAt: number;
+const runtime = globalThis as typeof globalThis & {
+  nurseFlowTemplates?: TemporaryCache<SourceWorkbookTemplate>;
+};
+const templates = runtime.nurseFlowTemplates ??= new TemporaryCache<SourceWorkbookTemplate>(
+  4,
+  8 * 60 * 60 * 1000,
+);
+
+export function cacheSourceWorkbookTemplate(
+  sessionId: string,
+  periodId: string,
+  template: SourceWorkbookTemplate,
+) {
+  templates.set(JSON.stringify([sessionId, periodId, template.sourceHash]), template);
 }
 
-const cache = new Map<string, CacheEntry>();
-const TTL_MS = 8 * 60 * 60 * 1000;
-const MAX_CACHE_ENTRIES = 4;
-
-function removeExpiredEntries(now: number) {
-  for (const [periodId, entry] of cache) {
-    if (entry.expiresAt < now) cache.delete(periodId);
-  }
-}
-
-export function cacheSourceWorkbookTemplate(periodId: string, template: SourceWorkbookTemplate) {
-  const now = Date.now();
-  removeExpiredEntries(now);
-  cache.delete(periodId);
-  while (cache.size >= MAX_CACHE_ENTRIES) {
-    const oldestPeriodId = cache.keys().next().value;
-    if (typeof oldestPeriodId !== "string") break;
-    cache.delete(oldestPeriodId);
-  }
-  cache.set(periodId, { value: template, expiresAt: now + TTL_MS });
-}
-
-export function getSourceWorkbookTemplate(periodId: string, expectedSourceHash?: string) {
-  const entry = cache.get(periodId);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    cache.delete(periodId);
-    return null;
-  }
-  if (expectedSourceHash && entry.value.sourceHash !== expectedSourceHash) return null;
-  return entry.value;
-}
-
-export function resetSourceWorkbookTemplateCacheForTests() {
-  cache.clear();
+export function getSourceWorkbookTemplate(sessionId: string, periodId: string, sourceHash: string) {
+  return templates.get(JSON.stringify([sessionId, periodId, sourceHash]));
 }

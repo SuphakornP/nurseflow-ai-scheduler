@@ -175,6 +175,13 @@ describe("solver adapter request semantics", () => {
 });
 
 describe("solver adapter evidence handling", () => {
+  it("gives repeat generations of the same profile distinct candidate IDs", () => {
+    const first = solverResultToVersion(dataset, result(), "balanced", 1);
+    const next = solverResultToVersion(dataset, result(), "balanced", 1);
+
+    expect(next.id).not.toBe(first.id);
+  });
+
   it("does not invent OFF outcomes or 100 percent metrics for infeasible results", () => {
     const version = solverResultToVersion(
       dataset,

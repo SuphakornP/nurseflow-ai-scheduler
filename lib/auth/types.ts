@@ -8,6 +8,7 @@ export interface AdminConfig {
 }
 
 export interface AdminSession {
+  sessionId: string;
   email: string;
   displayName: string;
   role: typeof ADMIN_ROLE;

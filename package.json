@@ -16,8 +16,6 @@
     "test": "npm run test:web && npm run test:solver"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.3",
-    "@supabase/supabase-js": "^2.110.6",
     "clsx": "^2.1.1",
     "exceljs": "^4.4.0",
     "jose": "^6.2.3",

@@ -219,7 +219,7 @@ def export(payload: ExportRequest, request: Request) -> StreamingResponse:
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "message": "Persisted assignments failed independent validation",
+                    "message": "Schedule assignments failed independent validation",
                     "validation": validation.model_dump(mode="json"),
                 },
             )

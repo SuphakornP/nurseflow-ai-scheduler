@@ -278,19 +278,23 @@ export async function prepareSourceWorkbookTemplate(
     addSensitiveToken(sensitiveTokens, definedName.name);
     for (const range of definedName.ranges) addSensitiveToken(sensitiveTokens, range);
   }
+  const extraSheetCellValues = new Set<string>();
   for (const extraWorksheet of workbook.worksheets.slice(1)) {
     addSensitiveToken(sensitiveTokens, extraWorksheet.name);
     extraWorksheet.eachRow({ includeEmpty: false }, (row) => {
       row.eachCell({ includeEmpty: false }, (cell) => {
-        addSensitiveToken(sensitiveTokens, cellValue(cell.value));
+        addSensitiveToken(extraSheetCellValues, cellValue(cell.value));
         addActiveContentTokens(sensitiveTokens, cell.value);
         addCommentTokens(sensitiveTokens, cell.note);
       });
     });
   }
 
-  // Retain only the scheduling template. This prevents hidden or unrelated sheets
-  // from being copied into a later export.
+  // Monthly sheets can repeat scheduling headers and staff. Exempt only values
+  // retained in permitted first-sheet cells, never notes, codes or metadata.
+  for (const column of [...allowedRosterColumns, employeeCodeColumnIndex + 1, noteColumnIndex + 1]) {
+    extraSheetCellValues.delete(text(headers[column - 1]));
+  }
   for (const extraWorksheet of workbook.worksheets.slice(1)) {
     workbook.removeWorksheet(extraWorksheet.id);
   }
@@ -300,6 +304,9 @@ export async function prepareSourceWorkbookTemplate(
       const value = cell.value;
       addActiveContentTokens(sensitiveTokens, value);
       const isRosterRow = rosterRows.has(rowNumber);
+      if (extraSheetCellValues.size && isRosterRow && allowedRosterColumns.has(column)) {
+        extraSheetCellValues.delete(text(cellValue(value)));
+      }
       const shouldClear =
         rowNumber > headerRowNumber &&
         (!isRosterRow || !allowedRosterColumns.has(column));
@@ -353,6 +360,7 @@ export async function prepareSourceWorkbookTemplate(
   }
   const sanitizedBytes = new Uint8Array(sanitized);
   assertSafeXlsxArchive(arrayBuffer(sanitizedBytes));
+  for (const value of extraSheetCellValues) sensitiveTokens.add(value);
   await assertSensitiveContentRemoved(sanitizedBytes, sensitiveTokens);
   return {
     bytes: sanitizedBytes,

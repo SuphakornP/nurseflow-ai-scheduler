@@ -2,6 +2,10 @@
 
 Date: 2026-07-17
 
+This historical review describes the July 2026 build, which included a database.
+For the current database-free deployment and workbook lifecycle, see the
+[architecture](docs/architecture.md) and [privacy guide](docs/privacy.md).
+
 ## Executive summary
 
 The current repository has no identified Critical or High severity finding. The original unauthenticated-route, public-solver, spreadsheet-injection, and vulnerable-pytest findings have been remediated. The checked-in implementation is suitable for the stated private, single-admin hackathon scope when the Next.js app is the only public service and FastAPI is kept on private ingress.

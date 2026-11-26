@@ -151,7 +151,7 @@ export async function POST(request: Request) {
       ...parsedDataset,
       sourceWorkbookHash: sourceTemplate.sourceHash,
     };
-    cacheSourceWorkbookTemplate(dataset.period.id, sourceTemplate);
+    cacheSourceWorkbookTemplate(auth.session.sessionId, dataset.period.id, sourceTemplate);
     return NextResponse.json({
       dataset,
       summary: {

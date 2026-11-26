@@ -1,25 +1,33 @@
 import "server-only";
 
-import type { GenerateScheduleResponse } from "@/lib/types";
+import { TemporaryCache } from "@/lib/temporary-cache";
+import type { GenerateScheduleResponse, ScheduleDataset, ScheduleVersion } from "@/lib/types";
 
-interface CacheEntry {
-  value: GenerateScheduleResponse;
-  expiresAt: number;
+interface GeneratedCandidate {
+  dataset: ScheduleDataset;
+  version: ScheduleVersion;
+  generation: {
+    confirmation?: { versionId: string; confirmedAt: string };
+  };
 }
 
-const cache = new Map<string, CacheEntry>();
-const TTL_MS = 30 * 60 * 1000;
+// Route bundles in the same Next.js process must see the same temporary data.
+const runtime = globalThis as typeof globalThis & {
+  nurseFlowCandidates?: TemporaryCache<GeneratedCandidate>;
+};
+const candidates = runtime.nurseFlowCandidates ??= new TemporaryCache<GeneratedCandidate>(
+  12,
+  30 * 60 * 1000,
+);
 
-export function cacheSchedule(response: GenerateScheduleResponse) {
-  cache.set(response.dataset.period.id, { value: response, expiresAt: Date.now() + TTL_MS });
-}
-
-export function getCachedSchedule(periodId: string) {
-  const entry = cache.get(periodId);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    cache.delete(periodId);
-    return null;
+export function cacheSchedule(sessionId: string, response: GenerateScheduleResponse) {
+  const generation: GeneratedCandidate["generation"] = {};
+  for (const version of response.versions) {
+    const key = JSON.stringify([sessionId, response.dataset.period.id, version.id]);
+    candidates.set(key, { dataset: response.dataset, version, generation });
   }
-  return entry.value;
+}
+
+export function getCachedCandidate(sessionId: string, periodId: string, versionId: string) {
+  return candidates.get(JSON.stringify([sessionId, periodId, versionId]));
 }

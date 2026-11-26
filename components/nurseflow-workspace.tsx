@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { AdminSession } from "@/lib/auth/types";
 import {
   getConfirmationEligibility,
   getConfirmationGatePresentation,
@@ -22,36 +21,27 @@ import type {
   WorkflowStep,
 } from "@/lib/types";
 import { formatDateTime, formatPercent, getDates } from "@/lib/utils";
+import { createWorkbookPeriod, MAX_CONTEXT_DAYS } from "@/lib/workbook-period";
 
 import { createDemoResponse } from "@/components/demo-data";
 import {
   ScheduleMatrix,
-  type DateWindow,
   type SelectedAssignment,
 } from "@/components/schedule-matrix";
 import { SignOutButton } from "@/components/sign-out-button";
+import { getWorkspaceConfirmationGate } from "@/components/workspace-confirmation";
 
 type BusyAction = "load" | "generate" | "explain" | "confirm" | "export" | null;
-type ConnectionMode = "loading" | "live" | "demo" | "offline" | "error";
+type ConnectionMode = "loading" | "imported" | "live" | "demo" | "offline" | "error";
 
-interface PersistedHistoryVersion {
-  id: string;
-  version_no: number;
-  name: string;
-  status: string;
-  solver_status: string;
-  confirmed_at: string | null;
-  confirmed_by_nickname: string | null;
-}
-
-const DATE_WINDOWS: Array<{ id: DateWindow; label: string }> = [
-  { id: "month", label: "Month" },
-  { id: "week-1", label: "1-7" },
-  { id: "week-2", label: "8-14" },
-  { id: "week-3", label: "15-21" },
-  { id: "week-4", label: "22-28" },
-  { id: "week-5", label: "29-31" },
-];
+const CONNECTION_LABELS: Record<ConnectionMode, string> = {
+  loading: "Connecting",
+  imported: "Workbook ready",
+  live: "Live solver",
+  demo: "Precomputed snapshot",
+  offline: "Offline",
+  error: "Action needed",
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -92,36 +82,6 @@ function extractImportedDataset(value: unknown): ScheduleDataset | null {
     return null;
   }
   return dataset as unknown as ScheduleDataset;
-}
-
-function extractPersistedHistory(value: unknown): PersistedHistoryVersion[] {
-  if (!isRecord(value) || value.persistenceMode !== "SUPABASE" || !Array.isArray(value.versions)) {
-    return [];
-  }
-  return value.versions.flatMap((version) => {
-    if (
-      !isRecord(version) ||
-      typeof version.id !== "string" ||
-      typeof version.version_no !== "number" ||
-      typeof version.name !== "string" ||
-      typeof version.status !== "string" ||
-      typeof version.solver_status !== "string"
-    ) {
-      return [];
-    }
-    return [{
-      id: version.id,
-      version_no: version.version_no,
-      name: version.name,
-      status: version.status,
-      solver_status: version.solver_status,
-      confirmed_at: typeof version.confirmed_at === "string" ? version.confirmed_at : null,
-      confirmed_by_nickname:
-        typeof version.confirmed_by_nickname === "string"
-          ? version.confirmed_by_nickname
-          : null,
-    }];
-  });
 }
 
 async function responseError(response: Response, fallback: string) {
@@ -270,36 +230,45 @@ function getOutcome(
   );
 }
 
-export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
+export function NurseFlowWorkspace({ displayName }: { displayName: string }) {
   const initialResponse = useMemo(() => createDemoResponse(), []);
   const [response, setResponse] = useState<GenerateScheduleResponse>(initialResponse);
   const [stagedDataset, setStagedDataset] = useState<ScheduleDataset | null>(null);
   const [activeVersionId, setActiveVersionId] = useState(
     () => preferredVersion(initialResponse)?.id ?? initialResponse.versions[0]?.id,
   );
-  const [activeStep, setActiveStep] = useState<WorkflowStep>("generate");
+  const [activeStep, setActiveStep] = useState<WorkflowStep>("import");
   const [selected, setSelected] = useState<SelectedAssignment | undefined>(() =>
     initialSelection(initialResponse),
   );
-  const [dateWindow, setDateWindow] = useState<DateWindow>("month");
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>("loading");
+  const [dateWindow, setDateWindow] = useState(0);
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>("demo");
   const [networkOnline, setNetworkOnline] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [notice, setNotice] = useState(
-    "Synthetic nickname-only data is ready while the live services connect.",
+    "A synthetic roster is available to preview. Import a workbook or load the synthetic demo to calculate schedules.",
   );
   const [sheetUrl, setSheetUrl] = useState("");
-  const [fileName, setFileName] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [month, setMonth] = useState(initialResponse.dataset.period.startDate.slice(0, 7));
+  const [contextDays, setContextDays] = useState("3");
   const [resolvedReviewCount, setResolvedReviewCount] = useState(0);
   const [explanation, setExplanation] = useState("");
-  const [persistedVersions, setPersistedVersions] = useState<PersistedHistoryVersion[]>([]);
 
   const activeVersion =
     response.versions.find((version) => version.id === activeVersionId) ?? response.versions[0];
   const baselineVersion = response.versions[0];
   const workingDataset = stagedDataset ?? response.dataset;
+  const scheduleDates = getDates(workingDataset.period.startDate, workingDataset.period.endDate);
+  const dateWindows = ["Month", ...Array.from({ length: Math.ceil(scheduleDates.length / 7) }, (_, index) =>
+    `${index * 7 + 1}-${Math.min((index + 1) * 7, scheduleDates.length)}`,
+  )];
+  const visibleDates = dateWindow === 0
+    ? scheduleDates
+    : scheduleDates.slice((dateWindow - 1) * 7, dateWindow * 7);
   const hasPendingDataset = stagedDataset !== null;
+  const hasUnimportedSource = Boolean(selectedFile || sheetUrl.trim());
   const reviewRequests = workingDataset.requests.filter((request) => request.requiresReview);
   const lockedRequests = workingDataset.requests.filter(
     (request) => request.constraintMode === "LOCKED",
@@ -320,20 +289,12 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   const isDemoSnapshot = activeVersion?.solverStatus === "DEMO";
   const confirmationEligibility = getConfirmationEligibility(activeVersion);
   const confirmationGate = getConfirmationGatePresentation(activeVersion);
-  const displayedConfirmationGate = hasPendingDataset
-    ? {
-        state: "BLOCKED" as const,
-        className: "is-blocked" as const,
-        label: "Blocked" as const,
-        summary: "Generate imported requests first",
-        description:
-          "This imported request dataset has not been optimized. Generate and validate new candidates before confirmation.",
-        disabledReason:
-          "Generate candidates from the imported request data before choosing, confirming, or exporting a version.",
-      }
-    : confirmationGate;
+  const displayedConfirmationGate = getWorkspaceConfirmationGate(
+    activeVersion, response.versions, { hasUnimportedSource, hasPendingDataset },
+  );
   const hasTrustedSchedule = !hasPendingDataset && confirmationGate.state !== "BLOCKED";
-  const canConfirmActiveVersion = !hasPendingDataset && confirmationEligibility.eligible;
+  const canExportActiveVersion = hasTrustedSchedule && !isDemoSnapshot && !hasUnimportedSource;
+  const canConfirmActiveVersion = displayedConfirmationGate.state === "READY";
   const selectedVersionBlockReason = displayedConfirmationGate.disabledReason;
   const displayedValidations = hasPendingDataset ? [] : confirmationEligibility.validations;
   const firstBlockingDetail = displayedValidations.find(
@@ -366,74 +327,46 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
     [workingDataset.nurses],
   );
 
-  const applyResponse = useCallback(
-    (next: GenerateScheduleResponse, acceptedReviewCount = 0) => {
-      setResponse(next);
-      setStagedDataset(null);
-      const nextVersion = preferredVersion(next);
-      setActiveVersionId(nextVersion?.id ?? next.versions[0]?.id);
-      setSelected(initialSelection(next));
-      setExplanation("");
-      setResolvedReviewCount(acceptedReviewCount);
-    },
-    [],
-  );
+  const applyResponse = (next: GenerateScheduleResponse, acceptedReviewCount = 0) => {
+    setResponse(next);
+    setStagedDataset(null);
+    const nextVersion = preferredVersion(next);
+    setActiveVersionId(nextVersion?.id ?? next.versions[0]?.id);
+    setSelected(initialSelection(next));
+    setExplanation("");
+    setResolvedReviewCount(acceptedReviewCount);
+    setDateWindow(0);
+  };
 
-  const refreshPersistedHistory = useCallback(async (periodId: string) => {
-    const result = await adminFetch(`/api/history?periodId=${encodeURIComponent(periodId)}`, {
-      cache: "no-store",
-    });
-    if (!result.ok) {
-      throw new Error(await responseError(result, "Unable to load confirmed history."));
-    }
-    const versions = extractPersistedHistory(await result.json());
-    setPersistedVersions(versions);
-    return versions;
-  }, []);
-
-  const loadDemo = useCallback(async () => {
+  const loadDemo = async () => {
     setBusyAction("load");
     setConnectionMode("loading");
+    setNotice("Calculating candidate schedules with synthetic data...");
     try {
       const result = await adminFetch("/api/demo", { method: "POST", cache: "no-store" });
-      if (!result.ok) throw new Error(`Demo endpoint returned ${result.status}.`);
+      if (!result.ok) throw new Error(await responseError(result, "The synthetic demo could not be calculated."));
       const parsed = extractGenerateResponse(await result.json());
       if (!parsed) throw new Error("Demo endpoint returned an unexpected shape.");
       applyResponse(parsed);
+      setSelectedFile(null);
+      setSheetUrl("");
       setConnectionMode(parsed.mode === "solver" ? "live" : "demo");
-      let historyNotice = "";
-      try {
-        const history = await refreshPersistedHistory(parsed.dataset.period.id);
-        if (history.some((version) => version.status === "CONFIRMED")) {
-          historyNotice = " A confirmed Supabase version is available in the archive.";
-        }
-      } catch (error) {
-        historyNotice = ` Confirmed history could not be loaded: ${error instanceof Error ? error.message : "unknown error"}`;
-      }
       setNotice(
-        (parsed.message ??
+        parsed.message ??
           (parsed.mode === "demo"
             ? "A precomputed showcase snapshot is loaded. Run Generate to request fresh solver output."
-            : "Live schedule data loaded successfully.")) + historyNotice,
+            : "Synthetic schedules calculated. Compare candidates and export the version you choose."),
       );
-    } catch {
-      const fallback = createDemoResponse();
-      applyResponse(fallback);
-      setConnectionMode(navigator.onLine ? "demo" : "offline");
+      setActiveStep("compare");
+    } catch (error) {
+      setConnectionMode(navigator.onLine ? "error" : "offline");
       setNotice(
-        navigator.onLine
-          ? "Live demo endpoint is unavailable. The complete local showcase dataset is active."
-          : "You are offline. The complete local showcase dataset remains available.",
+        error instanceof Error ? error.message : "The solver could not calculate the synthetic demo.",
       );
     } finally {
       setBusyAction(null);
     }
-  }, [applyResponse, refreshPersistedHistory]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void loadDemo(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadDemo]);
+  };
 
   useEffect(() => {
     const updateNetworkState = () => setNetworkOnline(navigator.onLine);
@@ -483,17 +416,14 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
 
   const handleImportContinue = async () => {
     if (!selectedFile && !sheetUrl.trim()) {
-      setStagedDataset(null);
-      setResolvedReviewCount(0);
-      setActiveStep("review");
-      setNotice("Using the synthetic nickname-only request set for this showcase.");
+      setNotice("Choose an Excel workbook or enter a Google Sheet URL to import.");
       return;
     }
 
     setBusyAction("load");
     setNotice("Importing the request sheet and enforcing nickname-only privacy checks...");
     try {
-      const period = { ...response.dataset.period, status: "DRAFT" as const };
+      const period = createWorkbookPeriod(month, Number(contextDays), crypto.randomUUID());
       let result: Response;
       if (selectedFile) {
         const form = new FormData();
@@ -519,9 +449,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
         normalizationWarning = ` AI suggestions were unavailable (${error instanceof Error ? error.message : "unknown error"}); deterministic suggestions remain visible.`;
       }
       setStagedDataset(normalized.dataset);
+      setSelectedFile(null);
+      setSheetUrl("");
+      setSelected(undefined);
+      setExplanation("");
       setResolvedReviewCount(0);
       setActiveStep("review");
-      setConnectionMode("live");
+      setConnectionMode("imported");
       const lockedCount = normalized.dataset.requests.filter(
         (request) => request.constraintMode === "LOCKED",
       ).length;
@@ -548,6 +482,11 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   };
 
   const handleGenerate = async () => {
+    if (hasUnimportedSource) {
+      setActiveStep("import");
+      setNotice("Choose Review source to import the selected workbook before calculating candidates.");
+      return;
+    }
     if (reviewRequests.length > resolvedReviewCount) {
       setActiveStep("review");
       setNotice(
@@ -583,16 +522,12 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             : "Optimization finished, but no safe roster was produced. Soft requests may be unmet, but fixed VAC/ED events, required choices, staffing, and safety rules must pass before a version can be chosen."
           : "A precomputed showcase response was loaded. It is labelled DEMO until fresh solver output is available.",
       );
+      setActiveStep("compare");
     } catch (error) {
       setConnectionMode(networkOnline ? "error" : "offline");
-      setNotice(
-        error instanceof Error
-          ? `${error.message} The previous schedule view remains on screen and must be rechecked before use.`
-          : "Optimization failed. The previous schedule view remains on screen and must be rechecked before use.",
-      );
+      setNotice(error instanceof Error ? error.message : "Optimization failed. Try generating again.");
     } finally {
       setBusyAction(null);
-      setActiveStep("compare");
     }
   };
 
@@ -632,8 +567,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
     }
   };
 
-  const markConfirmedLocally = () => {
-    const confirmedAt = new Date().toISOString();
+  const markConfirmedLocally = (confirmedAt: string) => {
     setResponse((current) => ({
       ...current,
       dataset: {
@@ -646,7 +580,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               ...version,
               status: "CONFIRMED",
               confirmedAt,
-              confirmedByNickname: admin.displayName,
+              confirmedByNickname: displayName,
             }
           : version,
       ),
@@ -655,12 +589,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
 
   const handleConfirm = async () => {
     if (!canConfirmActiveVersion) {
-      setConnectionMode("error");
-      setNotice(
-        hasPendingDataset
-          ? "Generate candidates from the imported request data before confirmation."
-          : confirmationEligibility.message,
-      );
+      setNotice(displayedConfirmationGate.disabledReason);
       setActiveStep("confirm");
       return;
     }
@@ -681,19 +610,11 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
       if (!confirmation) {
         throw new Error("The confirmation endpoint returned an invalid success response.");
       }
-      markConfirmedLocally();
-      let archiveWarning = "";
-      if (confirmation.persisted) {
-        try {
-          await refreshPersistedHistory(response.dataset.period.id);
-        } catch (error) {
-          archiveWarning = ` The version is confirmed, but archive refresh failed: ${error instanceof Error ? error.message : "unknown error"}`;
-        }
-      }
-      setConnectionMode(confirmation.persisted ? "live" : "demo");
+      markConfirmedLocally(confirmation.confirmedAt);
+      setConnectionMode("live");
       setNotice(
-        (confirmation.message ??
-          `Version ${activeVersion.versionNo} is confirmed and ready to export.`) + archiveWarning,
+        confirmation.message ??
+          `Version ${activeVersion.versionNo} is confirmed in this workspace. Download the Excel file to keep it.`,
       );
     } catch (error) {
       setConnectionMode("error");
@@ -705,7 +626,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
   };
 
   const handleExport = async () => {
-    if (!hasTrustedSchedule) {
+    if (!canExportActiveVersion) {
       setConnectionMode("error");
       setNotice(
         "Export is blocked because this version does not have complete, passing hard-rule evidence.",
@@ -736,42 +657,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
     }
   };
 
-  const handlePersistedExport = async (version: PersistedHistoryVersion) => {
-    setBusyAction("export");
-    try {
-      const result = await adminFetch("/api/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          periodId: response.dataset.period.id,
-          versionId: version.id,
-        }),
-      });
-      if (!result.ok) {
-        throw new Error(await responseError(result, "Persisted export failed."));
-      }
-      downloadBlob(
-        await result.blob(),
-        `nurseflow-${response.dataset.period.code}-archive-v${version.version_no}.xlsx`,
-      );
-      setNotice(`Confirmed archive version ${version.version_no} exported from Supabase.`);
-    } catch (error) {
-      setConnectionMode("error");
-      setNotice(error instanceof Error ? error.message : "Persisted export failed.");
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const connectionLabel = !networkOnline
-    ? "Offline"
-    : connectionMode === "live"
-      ? "Live solver"
-      : connectionMode === "loading"
-        ? "Connecting"
-      : connectionMode === "error"
-          ? "Action needed"
-          : "Precomputed snapshot";
+  const connectionLabel = networkOnline ? CONNECTION_LABELS[connectionMode] : "Offline";
 
   return (
     <main className="workspace-shell">
@@ -789,26 +675,26 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
         </div>
 
         <div className="period-heading">
-          <p>{response.dataset.period.departmentCode} / August 2026</p>
-          <h1>{response.dataset.period.name}</h1>
+          <p>{workingDataset.period.code}</p>
+          <h1>{workingDataset.period.name}</h1>
         </div>
 
         <div className="header-actions">
           <span className="privacy-badge">
             <i aria-hidden="true" /> {isSyntheticDataset ? "Nickname-only synthetic data" : "Nickname-only request data"}
           </span>
-          <span className="admin-identity" aria-label={`Signed in as ${admin.displayName}, admin`}>
+          <span className="admin-identity" aria-label={`Signed in as ${displayName}, admin`}>
             <i aria-hidden="true">A</i>
             <span>
-              <b>{admin.displayName}</b>
+              <b>{displayName}</b>
               <small>ADMIN</small>
             </span>
           </span>
           <button
             className="button button--ghost"
             type="button"
-            disabled={busyAction === "export" || !hasTrustedSchedule}
-            title={hasTrustedSchedule ? undefined : "Export requires a safe version with passing hard-rule evidence."}
+            disabled={busyAction !== null || !canExportActiveVersion}
+            title={canExportActiveVersion ? undefined : selectedVersionBlockReason}
             onClick={() => void handleExport()}
           >
             {busyAction === "export" ? "Preparing..." : "Export"}
@@ -816,11 +702,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <button
             className="button button--primary"
             type="button"
-            disabled={busyAction === "confirm" || !canConfirmActiveVersion}
+            disabled={busyAction !== null || !canConfirmActiveVersion}
             title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
             onClick={() => void handleConfirm()}
           >
-            {activeVersion.status === "CONFIRMED"
+            {hasPendingDataset
+              ? "Confirm schedule"
+              : activeVersion.status === "CONFIRMED"
               ? `Version ${activeVersion.versionNo} confirmed`
               : busyAction === "confirm"
                 ? "Confirming..."
@@ -871,46 +759,66 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <>
             <div className="dock-copy">
               <p className="eyebrow">01 / Import</p>
-              <h2 id="action-dock-title">Bring in the request sheet</h2>
-              <p>Only nicknames and scheduling values continue into this workspace.</p>
+              <h2 id="action-dock-title">Import scheduling context</h2>
+              <p>Include a nickname, skill level, previous shifts and dated request columns. This workspace is temporary. Download the Excel roster to keep a copy.</p>
             </div>
             <div className="import-controls">
               <label>
-                <span>Google Sheet URL</span>
-                <input
-                  type="url"
-                  value={sheetUrl}
-                  placeholder="https://docs.google.com/spreadsheets/..."
-                  onChange={(event) => setSheetUrl(event.target.value)}
-                />
+                <span>Scheduling month</span>
+                <input type="month" value={month} disabled={busyAction !== null} onChange={(event) => setMonth(event.target.value)} />
+              </label>
+              <label>
+                <span>Previous days in workbook</span>
+                <input type="number" min={1} max={MAX_CONTEXT_DAYS} value={contextDays} disabled={busyAction !== null}
+                  onChange={(event) => setContextDays(event.target.value)} />
               </label>
               <label className="file-control">
-                <span>{fileName || "Choose Excel"}</span>
+                <span>{selectedFile?.name || "Choose Excel (.xlsx)"}</span>
                 <input
+                  ref={fileInput}
                   type="file"
+                  disabled={busyAction !== null}
                   accept=".xlsx"
                   onChange={(event) => {
                     const file = event.target.files?.[0] ?? null;
                     setSelectedFile(file);
-                    setFileName(file?.name ?? "");
+                    if (file) setSheetUrl("");
                   }}
                 />
               </label>
+              <label>
+                <span>Or Google Sheet URL</span>
+                <input
+                  type="url"
+                  disabled={busyAction !== null}
+                  value={sheetUrl}
+                  placeholder="https://docs.google.com/spreadsheets/..."
+                  onChange={(event) => {
+                    setSheetUrl(event.target.value);
+                    if (event.target.value) {
+                      setSelectedFile(null);
+                      if (fileInput.current) fileInput.current.value = "";
+                    }
+                  }}
+                />
+              </label>
+            </div>
+            <div className="dock-actions">
               <button
                 className="button button--primary"
                 type="button"
-                disabled={busyAction === "load"}
+                disabled={busyAction !== null || !hasUnimportedSource}
                 onClick={() => void handleImportContinue()}
               >
-                {busyAction === "load" ? "Importing..." : "Review source"}
+                Review source
               </button>
               <button
                 className="text-button"
                 type="button"
-                disabled={busyAction === "load"}
+                disabled={busyAction !== null}
                 onClick={() => void loadDemo()}
               >
-                {busyAction === "load" ? "Loading..." : "Reload synthetic demo"}
+                Load synthetic demo
               </button>
             </div>
           </>
@@ -945,7 +853,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <p className="review-clear">All request values use the approved vocabulary.</p>
               )}
             </div>
-            <button className="button button--primary" type="button" onClick={handleResolveAll}>
+            <button className="button button--primary" type="button" disabled={busyAction !== null} onClick={handleResolveAll}>
               {reviewRequests.length === 0
                 ? "Continue to generate"
                 : resolvedReviewCount === reviewRequests.length
@@ -960,17 +868,17 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div className="dock-copy">
               <p className="eyebrow">03 / Generate</p>
               <h2 id="action-dock-title">Build safe candidate schedules</h2>
-              <p>{workingDataset.nurses.length * getDates(workingDataset.period.startDate, workingDataset.period.endDate).length} assignments are optimized, then checked again by an independent validator.</p>
+              <p>{workingDataset.nurses.length * scheduleDates.length} assignments are optimized, then checked again by an independent validator.</p>
             </div>
             <div className="generation-proof" aria-label="Generation scope">
               <span><strong>{workingDataset.nurses.length}</strong> nicknames</span>
-              <span><strong>{getDates(workingDataset.period.startDate, workingDataset.period.endDate).length}</strong> days</span>
-              <span><strong>{activeVersion.metrics.hardConstraintsTotal}</strong> hard rules</span>
+              <span><strong>{scheduleDates.length}</strong> days</span>
+              <span><strong>{workingDataset.previousAssignments.length}</strong> previous shifts</span>
             </div>
             <button
               className="button button--primary button--large"
               type="button"
-              disabled={busyAction === "generate"}
+              disabled={busyAction !== null}
               onClick={() => void handleGenerate()}
             >
               {busyAction === "generate" ? <><i className="busy-dot" /> Optimizing...</> : "Generate candidates"}
@@ -982,9 +890,13 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <>
             <div className="dock-copy">
               <p className="eyebrow">04 / Compare</p>
-              <h2 id="action-dock-title">Version {activeVersion.versionNo}: {activeVersion.name}</h2>
+              <h2 id="action-dock-title">{hasPendingDataset ? "Awaiting candidates" : `Version ${activeVersion.versionNo}: ${activeVersion.name}`}</h2>
               <p>
-                {hasTrustedSchedule
+                {hasPendingDataset
+                  ? "Generate the imported workbook to compare its schedules."
+                  : isDemoSnapshot
+                  ? "These sample versions illustrate the trade-offs. Generate candidates to compare solver results."
+                  : hasTrustedSchedule
                   ? "Compare soft-request satisfaction and workload trade-offs. Fixed VAC/ED events and required choices already passed as mandatory evidence."
                   : "This result cannot be used as a roster. Review the failed or missing hard-rule evidence, adjust the inputs, and generate again."}
               </p>
@@ -1006,7 +918,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <button
               className="button button--primary"
               type="button"
-              disabled={!canConfirmActiveVersion}
+              disabled={busyAction !== null || !canConfirmActiveVersion}
               title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
               onClick={() => setActiveStep("confirm")}
             >
@@ -1014,6 +926,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 ? `Choose version ${activeVersion.versionNo}`
                 : hasPendingDataset
                   ? "Generate imported requests first"
+                : isDemoSnapshot
+                  ? "Generate candidates first"
                 : activeVersion.status === "CONFIRMED"
                   ? `Version ${activeVersion.versionNo} confirmed`
                   : `Version ${activeVersion.versionNo} blocked`}
@@ -1036,17 +950,17 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               <button
                 className="button button--primary"
                 type="button"
-                disabled={busyAction === "confirm" || !canConfirmActiveVersion}
+                disabled={busyAction !== null || !canConfirmActiveVersion}
                 title={canConfirmActiveVersion ? undefined : selectedVersionBlockReason}
                 onClick={() => void handleConfirm()}
               >
-                {activeVersion.status === "CONFIRMED" ? "Confirmed" : "Confirm schedule"}
+                {!hasPendingDataset && activeVersion.status === "CONFIRMED" ? "Confirmed" : "Confirm schedule"}
               </button>
               <button
                 className="button button--ghost"
                 type="button"
-                disabled={busyAction === "export" || !hasTrustedSchedule}
-                title={hasTrustedSchedule ? undefined : "Export requires a safe version with passing hard-rule evidence."}
+                disabled={busyAction !== null || !canExportActiveVersion}
+                title={canExportActiveVersion ? undefined : selectedVersionBlockReason}
                 onClick={() => void handleExport()}
               >
                 Export selected
@@ -1117,7 +1031,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
             <div>
               <p className="eyebrow">Decision surface</p>
               <div className="surface-title-line">
-                <h2>August roster</h2>
+                <h2>{workingDataset.period.name}</h2>
                 {isDemoSnapshot && !hasPendingDataset ? <span>Precomputed / DEMO</span> : null}
                 {!hasTrustedSchedule ? <span>Preview withheld</span> : null}
               </div>
@@ -1138,14 +1052,14 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                 <span><i className="constraint-key constraint-key--required">R</i> Required choice</span>
               </div>
               <div className="date-window" aria-label="Visible schedule dates">
-                {DATE_WINDOWS.map((window) => (
+                {dateWindows.map((label, index) => (
                   <button
                     type="button"
-                    key={window.id}
-                    aria-pressed={dateWindow === window.id}
-                    onClick={() => setDateWindow(window.id)}
+                    key={label}
+                    aria-pressed={dateWindow === index}
+                    onClick={() => setDateWindow(index)}
                   >
-                    {window.label}
+                    {label}
                   </button>
                 ))}
               </div>
@@ -1157,7 +1071,8 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               nurses={response.dataset.nurses}
               version={activeVersion}
               baselineVersion={baselineVersion}
-              dateWindow={dateWindow}
+              dates={visibleDates}
+              periodName={workingDataset.period.name}
               selected={selected}
               onSelect={selectAssignment}
             />
@@ -1245,7 +1160,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
                     !selectedOutcome ||
                     selectedOutcome.satisfied ||
                     selectedOutcome.constraintMode !== "PREFERENCE" ||
-                    busyAction === "explain"
+                    busyAction !== null
                   }
                   onClick={() => void handleExplain()}
                 >
@@ -1307,7 +1222,7 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <section className="validation-list">
             <div className="rail-heading">
               <div>
-                <p className="eyebrow">{isDemoSnapshot ? "Reference snapshot" : "Independent check"}</p>
+                <p className="eyebrow">{isDemoSnapshot && !hasPendingDataset ? "Reference snapshot" : "Independent check"}</p>
                 <h3>Hard constraints</h3>
               </div>
               <span>{displayedConfirmationGate.summary}</span>
@@ -1349,38 +1264,41 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
           <h2 id="version-ledger-title">
             {hasPendingDataset
               ? "Generate the imported request set"
+              : isDemoSnapshot
+                ? "Synthetic roster preview"
               : trustedVersionCount > 0
                 ? "Safe roster options, different trade-offs"
                 : "No safe roster yet"}
           </h2>
           <p>
             {hasPendingDataset
-              ? "The versions below belong to the previous dataset and cannot be chosen, confirmed, or exported. Generate new candidates after review."
+              ? "Generate candidates to compare schedules for this workbook."
+              : isDemoSnapshot
+              ? "Explore the sample versions, then calculate a roster with the synthetic demo or a workbook."
               : trustedVersionCount > 0
               ? `${trustedVersionCount} of ${response.versions.length} candidates pass every hard rule. Fixed events and required choices are enforced; unmet soft requests stay visible for admin review.`
               : "None of the candidates passed every hard rule. Unmet soft requests can be accepted, but fixed events, required choices, staffing, and safety rules cannot; adjust the inputs and generate again."}
           </p>
         </div>
         <div className="version-rows">
-          {response.versions.map((version) => {
+          {!hasPendingDataset && response.versions.map((version) => {
             const isActive = version.id === activeVersion.id;
             const versionGate = getConfirmationGatePresentation(version);
-            const isTrustedVersion = !hasPendingDataset && versionGate.state !== "BLOCKED";
+            const isTrustedVersion = versionGate.state !== "BLOCKED";
             return (
               <button
                 className={isActive ? "is-active" : ""}
                 type="button"
                 key={version.id}
                 aria-pressed={isActive}
+                disabled={hasUnimportedSource || busyAction !== null}
                 onClick={() => selectVersion(version)}
               >
                 <span className="version-number">V{version.versionNo}</span>
                 <span className="version-name">
                   <strong>{version.name}</strong>
                   <small>
-                    {hasPendingDataset
-                      ? "Previous dataset / awaiting generation"
-                      : `${version.status} / ${version.solverStatus} / ${versionGate.label}`}
+                    {version.solverStatus === "DEMO" ? "DEMO / Preview" : `${version.status} / ${version.solverStatus}`}
                     {isTrustedVersion ? ` / score ${version.objectiveScore?.toLocaleString() ?? "-"}` : ""}
                   </small>
                 </span>
@@ -1392,34 +1310,6 @@ export function NurseFlowWorkspace({ admin }: { admin: AdminSession }) {
               </button>
             );
           })}
-          {persistedVersions.some((version) => version.status === "CONFIRMED") ? (
-            <div className="confirmed-archive">
-              <div>
-                <p className="eyebrow">Supabase archive</p>
-                <strong>Confirmed history</strong>
-              </div>
-              {persistedVersions
-                .filter((version) => version.status === "CONFIRMED")
-                .map((version) => (
-                  <article key={version.id}>
-                    <span>
-                      <strong>V{version.version_no} / {version.name}</strong>
-                      <small>
-                        {version.solver_status} | {version.confirmed_by_nickname ?? "Scheduler"} | {version.confirmed_at ? formatDateTime(version.confirmed_at) : "Confirmed"}
-                      </small>
-                    </span>
-                    <button
-                      className="button button--ghost"
-                      type="button"
-                      disabled={busyAction === "export"}
-                      onClick={() => void handlePersistedExport(version)}
-                    >
-                      Export archive
-                    </button>
-                  </article>
-                ))}
-            </div>
-          ) : null}
         </div>
       </section>
 

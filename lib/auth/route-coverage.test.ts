@@ -6,7 +6,6 @@ import { POST as explain } from "@/app/api/explain/route";
 import { POST as exportSchedule } from "@/app/api/export/route";
 import { POST as generate } from "@/app/api/generate/route";
 import { GET as health } from "@/app/api/health/route";
-import { GET as history } from "@/app/api/history/route";
 import { POST as importSchedule } from "@/app/api/import/route";
 import { POST as normalize } from "@/app/api/normalize/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/cookie";
@@ -20,7 +19,6 @@ const protectedHandlers = [
   ["export", exportSchedule, "POST"],
   ["generate", generate, "POST"],
   ["health", health, "GET"],
-  ["history", history, "GET"],
   ["import", importSchedule, "POST"],
   ["normalize", normalize, "POST"],
 ] as const;
